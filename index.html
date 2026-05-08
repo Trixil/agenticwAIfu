@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>agenticwAIfu</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="page-shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Home Screen Mockup</p>
+        <h1>agenticwAIfu</h1>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <aside class="panel left-panel">
+        <section class="panel-section">
+          <div class="section-heading">
+            <h2>Chats</h2>
+          </div>
+
+          <div class="stack-list">
+            <button class="list-card chat-card">
+              <span class="meta-line">Today | 18 messages</span>
+              <strong>First contact in the velvet lounge</strong>
+              <span class="chat-persona">Character 1</span>
+            </button>
+            <button class="list-card chat-card">
+              <span class="meta-line">Yesterday | 43 messages</span>
+              <strong>Planning the infiltration route</strong>
+              <span class="chat-persona">Character 2</span>
+            </button>
+            <button class="list-card chat-card">
+              <span class="meta-line">Draft | Unused</span>
+              <strong>Untitled new conversation</strong>
+              <span class="chat-persona">Character 3</span>
+            </button>
+          </div>
+        </section>
+      </aside>
+
+      <section class="panel center-panel">
+        <div class="center-stage">
+          <div class="chat-surface" id="default-surface">
+            <div class="chat-header">
+              <div>
+                <h2 class="chat-title">First Contact In The Velvet Lounge</h2>
+                <p class="chat-subtitle">Character 1</p>
+              </div>
+            </div>
+
+        <div class="chat-window">
+          <article class="message assistant-message">
+            <div class="message-shell">
+              <img class="message-avatar" src="assets/character-1.png" alt="Character 1 avatar">
+              <div class="message-body">
+                <button class="message-edit-button" type="button" aria-label="Edit message"></button>
+                <span class="message-label">Character</span>
+                <p>Welcome back. The room is prepared, the lights are low, and the next scene is waiting for your first line.</p>
+              </div>
+            </div>
+          </article>
+
+          <article class="message user-message">
+            <div class="message-body">
+              <button class="message-edit-button" type="button" aria-label="Edit message"></button>
+              <span class="message-label">User</span>
+              <p>Start a fresh chat with this character and the cinematic roleplay loadout.</p>
+            </div>
+          </article>
+
+          <article class="message assistant-message accent-message">
+            <div class="message-shell">
+              <img class="message-avatar" src="assets/character-1.png" alt="Character 1 avatar">
+              <div class="message-body">
+                <button class="message-edit-button" type="button" aria-label="Edit message"></button>
+                <span class="message-label">Preview</span>
+                <p>The home screen combines three independent choices: a character, a model loadout, and a chat thread that begins only when both are selected.</p>
+              </div>
+                </div>
+              </article>
+            </div>
+
+            <div class="composer">
+          <div class="composer-box">
+            <p class="composer-placeholder">Type your message...</p>
+            <button class="send-button" aria-label="Send message">></button>
+          </div>
+        </div>
+          </div>
+
+          <section class="editor-overlay" id="character-editor" aria-hidden="true">
+            <div class="overlay-header">
+              <div>
+                <p class="overlay-kicker">Character Editor</p>
+                <h2 class="overlay-title">Character 1</h2>
+              </div>
+              <button class="overlay-close-button" type="button" data-close-editor>Close</button>
+            </div>
+
+            <div class="overlay-form">
+              <div class="overlay-field">
+                <label class="overlay-label" for="editor-character-name">Character Name</label>
+                <input id="editor-character-name" class="overlay-input" type="text" value="Character 1">
+              </div>
+
+              <div class="overlay-field">
+                <label class="overlay-label" for="editor-character-nickname">Nickname</label>
+                <input id="editor-character-nickname" class="overlay-input" type="text" value="Character 1">
+              </div>
+
+              <div class="overlay-field">
+                <label class="overlay-label" for="editor-character-description">Description</label>
+                <textarea id="editor-character-description" class="overlay-textarea" rows="7">A poised host with a theatrical edge, tailored diction, and a tendency to turn ordinary requests into intimate little ceremonies.</textarea>
+              </div>
+
+              <div class="overlay-field">
+                <label class="overlay-label" for="editor-character-dialogue">Example Dialogue</label>
+                <textarea id="editor-character-dialogue" class="overlay-textarea" rows="8">"Welcome back. The room is prepared, and the city is glittering just for us tonight."
+
+"Tell me what mood you want, and I will make the scene behave accordingly."
+
+"If we are going to do this properly, you should start with a line worth remembering."</textarea>
+              </div>
+            </div>
+          </section>
+
+          <section class="editor-overlay" id="model-editor" aria-hidden="true">
+            <div class="overlay-header">
+              <div>
+                <p class="overlay-kicker">Model Loadout Editor</p>
+                <input id="editor-loadout-title" class="overlay-title-input" type="text" value="Model Loadout 1" aria-label="Model loadout title">
+              </div>
+              <button class="overlay-close-button" type="button" data-close-editor>Close</button>
+            </div>
+
+            <div class="overlay-form">
+              <div class="loadout-workspace">
+                <aside class="loadout-nav">
+                  <button class="loadout-role-button is-active" type="button" data-role-select="mind">Mind Model</button>
+                  <button class="loadout-role-button" type="button" data-role-select="author">Author Model</button>
+                  <button class="loadout-role-button" type="button" data-role-select="stat">Stat Model</button>
+                  <button class="loadout-role-button" type="button" data-role-select="event">Event Model</button>
+                  <button class="loadout-role-button" type="button" data-role-select="goal">Goal Model</button>
+                </aside>
+
+                <section class="loadout-detail">
+                  <div class="loadout-detail-header">
+                    <h3 class="loadout-detail-title" id="loadout-role-title">Mind Model</h3>
+                  </div>
+
+                  <div class="overlay-field">
+                    <label class="overlay-label" for="editor-role-llm">LLM</label>
+                    <input id="editor-role-llm" class="overlay-input" type="text" value="gpt-oss-cinematic">
+                  </div>
+
+                  <div class="overlay-grid">
+                    <div class="overlay-field">
+                      <label class="overlay-label" for="editor-temperature">Temperature</label>
+                      <input id="editor-temperature" class="overlay-input" type="text" value="1.05">
+                    </div>
+                    <div class="overlay-field">
+                      <label class="overlay-label" for="editor-top-p">Top P</label>
+                      <input id="editor-top-p" class="overlay-input" type="text" value="0.92">
+                    </div>
+                    <div class="overlay-field">
+                      <label class="overlay-label" for="editor-max-tokens">Max Tokens</label>
+                      <input id="editor-max-tokens" class="overlay-input" type="text" value="4096">
+                    </div>
+                  </div>
+
+                  <div class="overlay-field">
+                    <label class="overlay-label" for="editor-role-instructions">Role Instructions</label>
+                    <textarea id="editor-role-instructions" class="overlay-textarea" rows="8">Coordinate the overall reasoning pass, track the current scene state, and decide which specialist models should influence the next response.</textarea>
+                  </div>
+
+                  <div class="overlay-field">
+                    <label class="overlay-label" for="editor-default-instructions">Default Instructions</label>
+                    <textarea id="editor-default-instructions" class="overlay-textarea" rows="7">Stay consistent with the active character, preserve user agency, keep outputs machine-readable when required, and avoid contradicting established chat memory.</textarea>
+                  </div>
+                </section>
+              </div>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <aside class="panel right-panel">
+        <section class="panel-section config-group character-group">
+          <div class="section-heading">
+            <h2>Character</h2>
+            <p class="persona-name">Character 1</p>
+          </div>
+
+          <div class="character-preview">
+            <img class="character-image" src="assets/character-1.png" alt="Character 1 portrait">
+          </div>
+
+          <button class="edit-button" type="button" data-open-editor="character-editor">Edit Character</button>
+        </section>
+
+        <section class="panel-section config-group model-group">
+          <div class="section-heading">
+            <h2>Model Loadout</h2>
+            <p class="persona-name selectable-name">Model Loadout 1</p>
+          </div>
+
+          <button class="edit-button edit-button-model" type="button" data-open-editor="model-editor">Edit Model Loadout</button>
+        </section>
+      </aside>
+    </main>
+  </div>
+  <script src="script.js"></script>
+</body>
+</html>
