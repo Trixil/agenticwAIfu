@@ -25,23 +25,7 @@
             <h2>Chats</h2>
           </div>
 
-          <div class="stack-list">
-            <button class="list-card chat-card">
-              <span class="meta-line">Today | 18 messages</span>
-              <strong>First contact in the velvet lounge</strong>
-              <span class="chat-persona">Character 1</span>
-            </button>
-            <button class="list-card chat-card">
-              <span class="meta-line">Yesterday | 43 messages</span>
-              <strong>Planning the infiltration route</strong>
-              <span class="chat-persona">Character 2</span>
-            </button>
-            <button class="list-card chat-card">
-              <span class="meta-line">Draft | Unused</span>
-              <strong>Untitled new conversation</strong>
-              <span class="chat-persona">Character 3</span>
-            </button>
-          </div>
+          <div class="stack-list" id="chat-list"></div>
         </section>
       </aside>
 
@@ -50,47 +34,17 @@
           <div class="chat-surface" id="default-surface">
             <div class="chat-header">
               <div>
-                <h2 class="chat-title">First Contact In The Velvet Lounge</h2>
-                <p class="chat-subtitle" id="chat-character-subtitle">Character 1</p>
+                <h2 class="chat-title" id="chat-title">New Chat</h2>
+                <p class="chat-subtitle" id="chat-character-subtitle">Character</p>
               </div>
             </div>
 
-            <div class="chat-window">
-              <article class="message assistant-message">
-                <div class="message-shell">
-                  <img class="message-avatar character-driven-avatar" src="assets/character-1.png" alt="Character 1 avatar">
-                  <div class="message-body">
-                    <button class="message-edit-button" type="button" aria-label="Edit message"></button>
-                    <span class="message-label" id="primary-character-label">Character 1</span>
-                    <p>Welcome back. The room is prepared, the lights are low, and the next scene is waiting for your first line.</p>
-                  </div>
-                </div>
-              </article>
-
-              <article class="message user-message">
-                <div class="message-body">
-                  <button class="message-edit-button" type="button" aria-label="Edit message"></button>
-                  <span class="message-label">User</span>
-                  <p>Start a fresh chat with this character and the cinematic roleplay loadout.</p>
-                </div>
-              </article>
-
-              <article class="message assistant-message accent-message">
-                <div class="message-shell">
-                  <img class="message-avatar character-driven-avatar" src="assets/character-1.png" alt="Character 1 avatar">
-                  <div class="message-body">
-                    <button class="message-edit-button" type="button" aria-label="Edit message"></button>
-                    <span class="message-label" id="secondary-character-label">Character 1</span>
-                    <p>The home screen combines three independent choices: a character, a model loadout, and a chat thread that begins only when both are selected.</p>
-                  </div>
-                </div>
-              </article>
-            </div>
+            <div class="chat-window" id="chat-window"></div>
 
             <div class="composer">
               <div class="composer-box">
-                <p class="composer-placeholder">Type your message...</p>
-                <button class="send-button" aria-label="Send message">></button>
+                <textarea id="composer-input" class="composer-input" rows="1" placeholder="Type your message..."></textarea>
+                <button id="send-message-button" class="send-button" aria-label="Send message">></button>
               </div>
             </div>
           </div>
@@ -154,6 +108,17 @@
             </div>
 
             <div class="overlay-form">
+              <div class="loadout-toolbar">
+                <select id="loadout-select" class="loadout-select" aria-label="Choose saved model loadout"></select>
+                <div class="manager-button-row">
+                  <button class="manager-button" id="new-loadout-button" type="button">New Loadout</button>
+                  <button class="manager-button manager-button-primary" id="save-loadout-button" type="button">Save Loadout</button>
+                  <button class="manager-button manager-button-danger" id="delete-loadout-button" type="button">Delete Loadout</button>
+                </div>
+              </div>
+
+              <p class="manager-status" id="loadout-file-status">Model loadouts are loaded from and saved to a fixed folder on your PC.</p>
+
               <div class="loadout-workspace">
                 <aside class="loadout-nav">
                   <button class="loadout-role-button is-active" type="button" data-role-select="mind">Mind Model</button>
@@ -221,7 +186,19 @@
         <section class="panel-section config-group model-group">
           <div class="section-heading">
             <h2>Model Loadout</h2>
-            <p class="persona-name selectable-name">Model Loadout 1</p>
+            <div class="loadout-switcher">
+              <button
+                class="persona-name selectable-name loadout-switch-button"
+                id="selected-loadout-button"
+                type="button"
+                aria-haspopup="listbox"
+                aria-expanded="false"
+              >
+                <span id="selected-loadout-name">Model Loadout 1</span>
+                <span class="selectable-arrow" aria-hidden="true">></span>
+              </button>
+              <div class="loadout-switch-menu" id="loadout-switch-menu" hidden></div>
+            </div>
           </div>
 
           <button class="edit-button edit-button-model" type="button" data-open-editor="model-editor">Edit Model Loadout</button>

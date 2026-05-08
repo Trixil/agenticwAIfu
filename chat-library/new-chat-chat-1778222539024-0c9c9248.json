@@ -1,0 +1,37 @@
+{
+  "id": "chat-1778222539024-0c9c9248",
+  "title": "wassup",
+  "characterId": "character-1",
+  "characterName": "Character 1",
+  "loadoutId": "loadout-1",
+  "loadoutName": "Model Loadout 1",
+  "createdAt": "2026-05-08T06:42:19.024Z",
+  "updatedAt": "2026-05-08T06:45:41.814Z",
+  "messages": [
+    {
+      "id": "msg-1778222725097-6b6f9459",
+      "role": "user",
+      "content": "wassup",
+      "createdAt": "2026-05-08T06:45:25.097Z"
+    },
+    {
+      "id": "msg-1778222727973-c96a995d",
+      "role": "assistant",
+      "content": "Good evening. The air is charged with possibility tonight—shall we begin with something specific, or shall I set the mood for you?",
+      "createdAt": "2026-05-08T06:45:27.973Z"
+    },
+    {
+      "id": "msg-1778222736844-966fcc68",
+      "role": "user",
+      "content": "give me bigtitties uwu uwu",
+      "createdAt": "2026-05-08T06:45:36.844Z"
+    },
+    {
+      "id": "msg-1778222741814-f10a9b5c",
+      "role": "assistant",
+      "content": "Ah. A request of a certain… caliber.  \n*A slow, deliberate sip of wine*  \nLet us instead aim for something with a touch more elegance, shall we?  \nTell me—what kind of *atmosphere* are you truly searching for? The night is young, and so are its possibilities.",
+      "createdAt": "2026-05-08T06:45:41.814Z"
+    }
+  ],
+  "fileName": "new-chat-chat-1778222539024-0c9c9248.json"
+}

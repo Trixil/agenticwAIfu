@@ -1,22 +1,35 @@
 const DEFAULT_CHARACTER_IMAGE = "assets/character-1.png";
-const CHARACTER_API = "http://127.0.0.1:4317/api";
+const API_BASE = "http://127.0.0.1:4317/api";
 
 const pageType = document.body.dataset.page || "home";
 
 const overlays = Array.from(document.querySelectorAll(".editor-overlay"));
 const defaultSurface = document.getElementById("default-surface");
-const messageEditButtons = Array.from(
-  document.querySelectorAll(".message-edit-button")
-);
+
+const chatList = document.getElementById("chat-list");
+const chatTitle = document.getElementById("chat-title");
+const chatWindow = document.getElementById("chat-window");
+const chatCharacterSubtitle = document.getElementById("chat-character-subtitle");
+const composerInput = document.getElementById("composer-input");
+const sendMessageButton = document.getElementById("send-message-button");
 
 const roleButtons = Array.from(document.querySelectorAll("[data-role-select]"));
 const roleTitle = document.getElementById("loadout-role-title");
+const loadoutTitleInput = document.getElementById("editor-loadout-title");
 const roleLlm = document.getElementById("editor-role-llm");
 const roleTemperature = document.getElementById("editor-temperature");
 const roleTopP = document.getElementById("editor-top-p");
 const roleMaxTokens = document.getElementById("editor-max-tokens");
 const roleInstructions = document.getElementById("editor-role-instructions");
 const defaultInstructions = document.getElementById("editor-default-instructions");
+const loadoutSelect = document.getElementById("loadout-select");
+const newLoadoutButton = document.getElementById("new-loadout-button");
+const saveLoadoutButton = document.getElementById("save-loadout-button");
+const deleteLoadoutButton = document.getElementById("delete-loadout-button");
+const loadoutFileStatus = document.getElementById("loadout-file-status");
+const selectedLoadoutButton = document.getElementById("selected-loadout-button");
+const selectedLoadoutName = document.getElementById("selected-loadout-name");
+const loadoutSwitchMenu = document.getElementById("loadout-switch-menu");
 
 const characterTileGrid = document.getElementById("character-tile-grid");
 const saveCharacterButton = document.getElementById("save-character-button");
@@ -36,12 +49,6 @@ const characterDialogueInput = document.getElementById("editor-character-dialogu
 
 const selectedCharacterName = document.getElementById("selected-character-name");
 const selectedCharacterImage = document.getElementById("selected-character-image");
-const chatCharacterSubtitle = document.getElementById("chat-character-subtitle");
-const primaryCharacterLabel = document.getElementById("primary-character-label");
-const secondaryCharacterLabel = document.getElementById("secondary-character-label");
-const characterDrivenAvatars = Array.from(
-  document.querySelectorAll(".character-driven-avatar")
-);
 
 const roleData = {
   mind: {
@@ -57,14 +64,14 @@ const roleData = {
   },
   author: {
     title: "Author Model",
-    llm: "gpt-oss-prose",
-    temperature: "1.12",
-    topP: "0.96",
-    maxTokens: "3072",
+    llm: "deepseek/deepseek-chat-v3.1",
+    temperature: "0.90",
+    topP: "0.95",
+    maxTokens: "700",
     instructions:
-      "Write the final visible response in the selected character voice, keep rhythm and tone coherent, and turn planner output into polished dialogue.",
+      "Write the final visible in-character assistant response using the selected character's voice and the current chat context.",
     defaults:
-      "Respect safety boundaries, maintain continuity with prior turns, and never break the framing of the current scene unless instructed.",
+      "Stay in character, respond conversationally, preserve user agency, and continue the scene naturally from the conversation history.",
   },
   stat: {
     title: "Stat Model",
@@ -102,13 +109,29 @@ const roleData = {
 };
 
 let characters = [];
+let loadouts = [];
+let chats = [];
+let activeChat = null;
 let selectedCharacterId = null;
 let editingCharacterId = null;
+let selectedLoadoutId = null;
+let editingLoadoutId = null;
 let characterDirectory = "";
+let chatDirectory = "";
+let loadoutDirectory = "";
+let activeRoleKey = "mind";
+let isSending = false;
+let isLoadoutMenuOpen = false;
 
-function setCharacterFileStatus(message) {
+function setStatus(message) {
   if (characterFileStatus) {
     characterFileStatus.textContent = message;
+  }
+}
+
+function setLoadoutStatus(message) {
+  if (loadoutFileStatus) {
+    loadoutFileStatus.textContent = message;
   }
 }
 
@@ -116,8 +139,7 @@ function makeCharacterId() {
   if (window.crypto?.randomUUID) {
     return window.crypto.randomUUID();
   }
-
-  return `character-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `character-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
 }
 
 function createCharacterTemplate(index = 1) {
@@ -129,6 +151,15 @@ function createCharacterTemplate(index = 1) {
     description: "",
     dialogue: "",
     fileName: null,
+  };
+}
+
+function createLoadoutTemplate(index = 1) {
+  return {
+    id: `loadout-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+    name: `Model Loadout ${index}`,
+    fileName: null,
+    roles: JSON.parse(JSON.stringify(roleData)),
   };
 }
 
@@ -145,7 +176,11 @@ function normalizeCharacter(character) {
 }
 
 function getCharacterById(id) {
-  return characters.find((character) => character.id === id) ?? null;
+  return characters.find((character) => character.id === id) || null;
+}
+
+function getLoadoutById(id) {
+  return loadouts.find((loadout) => loadout.id === id) || null;
 }
 
 function getSelectedCharacter() {
@@ -164,6 +199,14 @@ function getCharacterImage(character) {
   return character?.image?.trim() || DEFAULT_CHARACTER_IMAGE;
 }
 
+function getSelectedLoadout() {
+  return getLoadoutById(selectedLoadoutId);
+}
+
+function getEditingLoadout() {
+  return getLoadoutById(editingLoadoutId);
+}
+
 function applyCharacterImage(img, source, altText) {
   if (!img) {
     return;
@@ -175,10 +218,53 @@ function applyCharacterImage(img, source, altText) {
     if (img.src.endsWith(DEFAULT_CHARACTER_IMAGE)) {
       return;
     }
-
     img.onerror = null;
     img.src = DEFAULT_CHARACTER_IMAGE;
   };
+}
+
+async function apiRequest(path, options = {}) {
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: {
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+      ...(options.headers || {}),
+    },
+  });
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.error || "Request failed.");
+  }
+
+  return response.json();
+}
+
+function formatChatMeta(chat) {
+  const updated = new Date(chat.updatedAt);
+  const now = new Date();
+  const sameDay =
+    updated.getFullYear() === now.getFullYear() &&
+    updated.getMonth() === now.getMonth() &&
+    updated.getDate() === now.getDate();
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  const isYesterday =
+    updated.getFullYear() === yesterday.getFullYear() &&
+    updated.getMonth() === yesterday.getMonth() &&
+    updated.getDate() === yesterday.getDate();
+
+  let dayLabel = updated.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
+  if (sameDay) {
+    dayLabel = "Today";
+  } else if (isYesterday) {
+    dayLabel = "Yesterday";
+  }
+
+  return `${dayLabel} | ${chat.messageCount} message${chat.messageCount === 1 ? "" : "s"}`;
 }
 
 function updateCharacterTitles(nameValue) {
@@ -210,61 +296,154 @@ function fillCharacterForm(character) {
 }
 
 function readCharacterForm() {
+  const current = getEditingCharacter();
   const name = characterNameInput.value.trim() || "Untitled Character";
   const nickname = characterNicknameInput.value.trim() || name;
 
   return {
     name,
     nickname,
-    image: getEditingCharacter()?.image?.trim() || DEFAULT_CHARACTER_IMAGE,
+    image: current?.image?.trim() || DEFAULT_CHARACTER_IMAGE,
     description: characterDescriptionInput.value,
     dialogue: characterDialogueInput.value,
   };
 }
 
+function normalizeLoadout(loadout) {
+  const fallback = createLoadoutTemplate(1);
+  return {
+    id: loadout?.id || fallback.id,
+    name: (loadout?.name || fallback.name).trim(),
+    fileName: loadout?.fileName || null,
+    roles: {
+      mind: { ...roleData.mind, ...(loadout?.roles?.mind || {}) },
+      author: { ...roleData.author, ...(loadout?.roles?.author || {}) },
+      stat: { ...roleData.stat, ...(loadout?.roles?.stat || {}) },
+      event: { ...roleData.event, ...(loadout?.roles?.event || {}) },
+      goal: { ...roleData.goal, ...(loadout?.roles?.goal || {}) },
+    },
+  };
+}
+
 function syncCharacterUI() {
   const character = getSelectedCharacter();
-
-  if (!character) {
-    if (selectedCharacterName) {
-      selectedCharacterName.textContent = "No Character";
-    }
-    if (chatCharacterSubtitle) {
-      chatCharacterSubtitle.textContent = "No Character";
-    }
-    if (primaryCharacterLabel) {
-      primaryCharacterLabel.textContent = "Character";
-    }
-    if (secondaryCharacterLabel) {
-      secondaryCharacterLabel.textContent = "Character";
-    }
-    applyCharacterImage(selectedCharacterImage, DEFAULT_CHARACTER_IMAGE, "Character portrait");
-    characterDrivenAvatars.forEach((avatar) => {
-      applyCharacterImage(avatar, DEFAULT_CHARACTER_IMAGE, "Character avatar");
-    });
-    return;
-  }
-
   const displayName = getCharacterDisplayName(character);
   const image = getCharacterImage(character);
 
   if (selectedCharacterName) {
-    selectedCharacterName.textContent = character.name;
+    selectedCharacterName.textContent = character?.name || "No Character";
   }
   if (chatCharacterSubtitle) {
-    chatCharacterSubtitle.textContent = displayName;
+    chatCharacterSubtitle.textContent = character ? displayName : "No Character";
   }
-  if (primaryCharacterLabel) {
-    primaryCharacterLabel.textContent = displayName;
+  applyCharacterImage(
+    selectedCharacterImage,
+    image,
+    character ? `${character.name} portrait` : "Character portrait"
+  );
+}
+
+function syncLoadoutUI() {
+  const loadout = getSelectedLoadout();
+  if (selectedLoadoutName) {
+    selectedLoadoutName.textContent = loadout?.name || "No Loadout";
   }
-  if (secondaryCharacterLabel) {
-    secondaryCharacterLabel.textContent = displayName;
+  renderLoadoutSwitchMenu();
+}
+
+function renderLoadoutSelect() {
+  if (!loadoutSelect) {
+    return;
   }
 
-  applyCharacterImage(selectedCharacterImage, image, `${character.name} portrait`);
-  characterDrivenAvatars.forEach((avatar) => {
-    applyCharacterImage(avatar, image, `${displayName} avatar`);
+  loadoutSelect.innerHTML = "";
+  loadouts.forEach((loadout) => {
+    const option = document.createElement("option");
+    option.value = loadout.id;
+    option.textContent = loadout.name;
+    option.selected = loadout.id === editingLoadoutId;
+    loadoutSelect.appendChild(option);
   });
+}
+
+function setLoadoutMenuOpen(isOpen) {
+  if (!selectedLoadoutButton || !loadoutSwitchMenu) {
+    return;
+  }
+
+  isLoadoutMenuOpen = isOpen;
+  selectedLoadoutButton.setAttribute("aria-expanded", String(isOpen));
+  loadoutSwitchMenu.hidden = !isOpen;
+}
+
+function renderLoadoutSwitchMenu() {
+  if (!loadoutSwitchMenu) {
+    return;
+  }
+
+  loadoutSwitchMenu.innerHTML = "";
+
+  loadouts.forEach((loadout) => {
+    const option = document.createElement("button");
+    option.type = "button";
+    option.className = "loadout-switch-option";
+    if (loadout.id === selectedLoadoutId) {
+      option.classList.add("is-active");
+    }
+    option.textContent = loadout.name;
+    option.addEventListener("click", async () => {
+      persistEditingRoleToLoadout();
+      selectedLoadoutId = loadout.id;
+      editingLoadoutId = loadout.id;
+      syncLoadoutUI();
+      renderLoadoutSelect();
+      fillLoadoutForm(loadout);
+      setLoadoutMenuOpen(false);
+
+      try {
+        await attachSelectedLoadoutToActiveChat();
+      } catch (error) {
+        setLoadoutStatus(error.message || "Failed to apply loadout to chat.");
+      }
+    });
+    loadoutSwitchMenu.appendChild(option);
+  });
+}
+
+function fillLoadoutForm(loadout) {
+  const effective = loadout ? normalizeLoadout(loadout) : normalizeLoadout(createLoadoutTemplate(loadouts.length + 1));
+  editingLoadoutId = effective.id;
+
+  if (loadoutTitleInput) {
+    loadoutTitleInput.value = effective.name;
+  }
+
+  const role = effective.roles[activeRoleKey] || effective.roles.mind;
+  if (roleTitle) roleTitle.textContent = roleData[activeRoleKey].title;
+  if (roleLlm) roleLlm.value = role.llm || "";
+  if (roleTemperature) roleTemperature.value = role.temperature || "";
+  if (roleTopP) roleTopP.value = role.topP || "";
+  if (roleMaxTokens) roleMaxTokens.value = role.maxTokens || "";
+  if (roleInstructions) roleInstructions.value = role.instructions || "";
+  if (defaultInstructions) defaultInstructions.value = role.defaults || "";
+  renderLoadoutSelect();
+}
+
+function persistEditingRoleToLoadout() {
+  const loadout = getEditingLoadout();
+  if (!loadout) {
+    return;
+  }
+
+  loadout.name = (loadoutTitleInput?.value || loadout.name || "Model Loadout").trim();
+  loadout.roles[activeRoleKey] = {
+    llm: roleLlm?.value || "",
+    temperature: roleTemperature?.value || "",
+    topP: roleTopP?.value || "",
+    maxTokens: roleMaxTokens?.value || "",
+    instructions: roleInstructions?.value || "",
+    defaults: defaultInstructions?.value || "",
+  };
 }
 
 function renderCharacterTileGrid() {
@@ -274,22 +453,20 @@ function renderCharacterTileGrid() {
 
   characterTileGrid.innerHTML = "";
 
-  if (pageType === "home") {
-    const addTile = document.createElement("button");
-    addTile.type = "button";
-    addTile.className = "character-tile character-tile-add";
-    addTile.setAttribute("aria-label", "Create new character");
-    addTile.innerHTML = `
-      <div class="character-tile-image-wrap character-tile-add-visual">
-        <span class="character-tile-plus">+</span>
-      </div>
-      <strong class="character-tile-name">New Character</strong>
-    `;
-    addTile.addEventListener("click", () => {
-      createCharacter();
-    });
-    characterTileGrid.appendChild(addTile);
-  }
+  const addTile = document.createElement("button");
+  addTile.type = "button";
+  addTile.className = "character-tile character-tile-add";
+  addTile.setAttribute("aria-label", "Create new character");
+  addTile.innerHTML = `
+    <div class="character-tile-image-wrap character-tile-add-visual">
+      <span class="character-tile-plus">+</span>
+    </div>
+    <strong class="character-tile-name">New Character</strong>
+  `;
+  addTile.addEventListener("click", () => {
+    createCharacterDraft();
+  });
+  characterTileGrid.appendChild(addTile);
 
   characters.forEach((character) => {
     const tile = document.createElement("button");
@@ -301,7 +478,6 @@ function renderCharacterTileGrid() {
 
     const imageWrap = document.createElement("div");
     imageWrap.className = "character-tile-image-wrap";
-
     const image = document.createElement("img");
     image.className = "character-tile-image";
     applyCharacterImage(image, getCharacterImage(character), `${character.name} portrait`);
@@ -312,13 +488,12 @@ function renderCharacterTileGrid() {
 
     imageWrap.appendChild(image);
     tile.append(imageWrap, name);
-
     tile.addEventListener("click", () => {
       selectedCharacterId = character.id;
       editingCharacterId = character.id;
       syncCharacterUI();
-      fillCharacterForm(character);
       renderCharacterTileGrid();
+      fillCharacterForm(character);
       openEditor("character-editor");
     });
 
@@ -326,47 +501,381 @@ function renderCharacterTileGrid() {
   });
 }
 
-async function apiRequest(path, options = {}) {
-  const response = await fetch(`${CHARACTER_API}${path}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {}),
-    },
-  });
-
-  if (!response.ok) {
-    const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.error || "Character API request failed.");
+function renderChatList() {
+  if (!chatList) {
+    return;
   }
 
-  return response.json();
+  chatList.innerHTML = "";
+
+  const newChatButton = document.createElement("button");
+  newChatButton.type = "button";
+  newChatButton.className = "list-card chat-card new-chat-card";
+  newChatButton.innerHTML = `
+    <span class="new-chat-plus">+</span>
+    <strong>New Chat</strong>
+    <span class="chat-persona">Start a new conversation</span>
+  `;
+  newChatButton.addEventListener("click", () => {
+    createNewChat();
+  });
+  chatList.appendChild(newChatButton);
+
+  chats.forEach((chat) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "list-card chat-card";
+    if (activeChat && chat.fileName === activeChat.fileName) {
+      button.classList.add("is-active");
+    }
+
+    const meta = document.createElement("span");
+    meta.className = "meta-line";
+    meta.textContent = formatChatMeta(chat);
+
+    const title = document.createElement("strong");
+    title.textContent = chat.title;
+
+    const persona = document.createElement("span");
+    persona.className = "chat-persona";
+    persona.textContent = chat.characterName || "Character";
+
+    button.append(meta, title, persona);
+    button.addEventListener("click", () => {
+      if (pageType === "home") {
+        window.location.href = `chat.html?chat=${encodeURIComponent(chat.fileName)}`;
+        return;
+      }
+      loadActiveChat(chat.fileName);
+    });
+
+    chatList.appendChild(button);
+  });
+}
+
+function createMessageElement(message, character) {
+  const article = document.createElement("article");
+  article.className = `message ${message.role === "assistant" ? "assistant-message" : "user-message"}`;
+
+  if (message.role === "assistant") {
+    const shell = document.createElement("div");
+    shell.className = "message-shell";
+
+    const avatar = document.createElement("img");
+    avatar.className = "message-avatar character-driven-avatar";
+    applyCharacterImage(
+      avatar,
+      getCharacterImage(character),
+      `${getCharacterDisplayName(character)} avatar`
+    );
+
+    const body = document.createElement("div");
+    body.className = "message-body";
+    body.dataset.messageId = message.id;
+
+    const editButton = document.createElement("button");
+    editButton.className = "message-edit-button";
+    editButton.type = "button";
+    editButton.setAttribute("aria-label", "Edit message");
+    editButton.addEventListener("click", () => {
+      startMessageEditing(article, message.id);
+    });
+
+    const label = document.createElement("span");
+    label.className = "message-label";
+    label.textContent = getCharacterDisplayName(character);
+
+    const paragraph = document.createElement("p");
+    paragraph.textContent = message.content;
+
+    body.append(editButton, label, paragraph);
+    shell.append(avatar, body);
+    article.appendChild(shell);
+    return article;
+  }
+
+  const body = document.createElement("div");
+  body.className = "message-body";
+  body.dataset.messageId = message.id;
+
+  const editButton = document.createElement("button");
+  editButton.className = "message-edit-button";
+  editButton.type = "button";
+  editButton.setAttribute("aria-label", "Edit message");
+  editButton.addEventListener("click", () => {
+    startMessageEditing(article, message.id);
+  });
+
+  const label = document.createElement("span");
+  label.className = "message-label";
+  label.textContent = "User";
+
+  const paragraph = document.createElement("p");
+  paragraph.textContent = message.content;
+
+  body.append(editButton, label, paragraph);
+  article.appendChild(body);
+  return article;
+}
+
+function renderActiveChat() {
+  if (!chatWindow || pageType !== "chat") {
+    return;
+  }
+
+  chatWindow.innerHTML = "";
+
+  if (!activeChat) {
+    chatTitle.textContent = "New Chat";
+    chatCharacterSubtitle.textContent = "No Character";
+    const empty = document.createElement("div");
+    empty.className = "chat-empty-state";
+    empty.textContent = "Create or select a chat to begin.";
+    chatWindow.appendChild(empty);
+    return;
+  }
+
+  chatTitle.textContent = activeChat.title || "New Chat";
+  const character = getCharacterById(activeChat.characterId);
+  chatCharacterSubtitle.textContent = getCharacterDisplayName(character);
+
+  if (!activeChat.messages.length) {
+    const empty = document.createElement("div");
+    empty.className = "chat-empty-state";
+    empty.textContent = "Send the first message to start this conversation.";
+    chatWindow.appendChild(empty);
+    return;
+  }
+
+  activeChat.messages.forEach((message) => {
+    chatWindow.appendChild(createMessageElement(message, character));
+  });
+  chatWindow.scrollTop = chatWindow.scrollHeight;
+}
+
+function setComposerDisabled(disabled) {
+  if (!composerInput || !sendMessageButton) {
+    return;
+  }
+
+  composerInput.disabled = disabled;
+  sendMessageButton.disabled = disabled;
+}
+
+function autosizeComposer() {
+  if (!composerInput) {
+    return;
+  }
+  composerInput.style.height = "0px";
+  composerInput.style.height = `${Math.max(56, composerInput.scrollHeight)}px`;
+}
+
+function updateChatSummary(fullChat) {
+  const existing = chats.findIndex((chat) => chat.fileName === fullChat.fileName);
+  const character = getCharacterById(fullChat.characterId);
+  const summary = {
+    id: fullChat.id,
+    fileName: fullChat.fileName,
+    title: fullChat.title,
+    characterId: fullChat.characterId,
+    characterName: character?.name || fullChat.characterName || "Character",
+    updatedAt: fullChat.updatedAt,
+    createdAt: fullChat.createdAt,
+    messageCount: Array.isArray(fullChat.messages) ? fullChat.messages.length : 0,
+  };
+
+  if (existing >= 0) {
+    chats.splice(existing, 1);
+  }
+  chats.unshift(summary);
+}
+
+async function attachSelectedLoadoutToActiveChat() {
+  if (!activeChat) {
+    return;
+  }
+
+  const loadout = getSelectedLoadout();
+  activeChat.loadoutId = selectedLoadoutId || null;
+  activeChat.loadoutName = loadout?.name || "No Loadout";
+
+  const payload = await apiRequest("/chats/save", {
+    method: "POST",
+    body: JSON.stringify({ chat: activeChat }),
+  });
+
+  activeChat = payload.chat;
+  updateChatSummary(activeChat);
+  renderChatList();
 }
 
 async function loadCharactersFromPc() {
-  const payload = await apiRequest("/characters", { method: "GET" });
+  const payload = await apiRequest("/characters");
   characters = (payload.characters || []).map((character) => normalizeCharacter(character));
   characterDirectory = payload.directory || "";
 
-  if (characters.length === 0 && pageType === "home") {
-    characters = [];
-    selectedCharacterId = null;
-    editingCharacterId = null;
-  } else {
-    selectedCharacterId =
-      characters.find((character) => character.id === selectedCharacterId)?.id ||
-      characters[0]?.id ||
-      null;
+  if (!selectedCharacterId && characters.length > 0) {
+    selectedCharacterId = characters[0].id;
     editingCharacterId = selectedCharacterId;
   }
 
   syncCharacterUI();
   renderCharacterTileGrid();
-  fillCharacterForm(getSelectedCharacter());
+}
 
-  if (pageType === "home" && characterDirectory) {
-    setCharacterFileStatus(`Characters loaded from ${characterDirectory}`);
+async function loadLoadoutsFromPc() {
+  const payload = await apiRequest("/loadouts");
+  loadouts = (payload.loadouts || []).map((loadout) => normalizeLoadout(loadout));
+  loadoutDirectory = payload.directory || "";
+
+  if (!selectedLoadoutId && loadouts.length > 0) {
+    selectedLoadoutId = loadouts[0].id;
+    editingLoadoutId = selectedLoadoutId;
+  } else if (!loadouts.some((loadout) => loadout.id === selectedLoadoutId)) {
+    selectedLoadoutId = loadouts[0]?.id || null;
+    editingLoadoutId = selectedLoadoutId;
   }
+
+  syncLoadoutUI();
+  renderLoadoutSelect();
+  fillLoadoutForm(getSelectedLoadout());
+}
+
+async function loadChatsFromPc() {
+  const payload = await apiRequest("/chats");
+  chats = payload.chats || [];
+  chatDirectory = payload.directory || "";
+  renderChatList();
+}
+
+async function loadActiveChat(fileName) {
+  const payload = await apiRequest(`/chats/${encodeURIComponent(fileName)}`);
+  activeChat = payload.chat;
+  selectedCharacterId = activeChat.characterId;
+  editingCharacterId = selectedCharacterId;
+  selectedLoadoutId = activeChat.loadoutId || selectedLoadoutId;
+  editingLoadoutId = selectedLoadoutId;
+  syncCharacterUI();
+  syncLoadoutUI();
+  renderChatList();
+  renderActiveChat();
+  const url = new URL(window.location.href);
+  url.searchParams.set("chat", activeChat.fileName);
+  window.history.replaceState({}, "", url);
+}
+
+async function createNewChat() {
+  const characterId = selectedCharacterId || characters[0]?.id;
+  const loadoutId = selectedLoadoutId || loadouts[0]?.id;
+  if (!characterId) {
+    setStatus("Create a character first.");
+    return;
+  }
+
+  const payload = await apiRequest("/chats/create", {
+    method: "POST",
+    body: JSON.stringify({ characterId, loadoutId }),
+  });
+
+  updateChatSummary(payload.chat);
+  renderChatList();
+
+  if (pageType === "home") {
+    window.location.href = `chat.html?chat=${encodeURIComponent(payload.chat.fileName)}`;
+    return;
+  }
+
+  await loadActiveChat(payload.chat.fileName);
+}
+
+async function saveCurrentLoadoutToPc() {
+  persistEditingRoleToLoadout();
+  let loadout = getEditingLoadout();
+  if (!loadout) {
+    loadout = normalizeLoadout(createLoadoutTemplate(loadouts.length + 1));
+    loadouts.push(loadout);
+    editingLoadoutId = loadout.id;
+  }
+
+  const payload = await apiRequest("/loadouts/save", {
+    method: "POST",
+    body: JSON.stringify({
+      loadout,
+      previousFileName: loadout.fileName || null,
+    }),
+  });
+
+  const savedLoadout = normalizeLoadout(payload.loadout);
+  const existingIndex = loadouts.findIndex((entry) => entry.id === savedLoadout.id);
+  if (existingIndex >= 0) {
+    loadouts.splice(existingIndex, 1, savedLoadout);
+  } else {
+    loadouts.push(savedLoadout);
+  }
+
+  selectedLoadoutId = savedLoadout.id;
+  editingLoadoutId = savedLoadout.id;
+  loadoutDirectory = payload.directory || loadoutDirectory;
+  syncLoadoutUI();
+  renderLoadoutSelect();
+  fillLoadoutForm(savedLoadout);
+
+  if (activeChat && activeChat.loadoutId === savedLoadout.id) {
+    await attachSelectedLoadoutToActiveChat();
+  }
+
+  setLoadoutStatus(
+    loadoutDirectory
+      ? `Saved to ${loadoutDirectory}\\${savedLoadout.fileName}`
+      : `Saved ${savedLoadout.fileName}`
+  );
+}
+
+async function deleteCurrentLoadout() {
+  const loadout = getEditingLoadout();
+  if (!loadout) {
+    return;
+  }
+
+  const confirmed = window.confirm(`Delete ${loadout.name}?`);
+  if (!confirmed) {
+    return;
+  }
+
+  if (loadout.fileName) {
+    await apiRequest(`/loadouts/${encodeURIComponent(loadout.fileName)}`, {
+      method: "DELETE",
+    });
+  }
+
+  loadouts = loadouts.filter((entry) => entry.id !== loadout.id);
+  selectedLoadoutId = loadouts[0]?.id || null;
+  editingLoadoutId = selectedLoadoutId;
+  syncLoadoutUI();
+  renderLoadoutSelect();
+  fillLoadoutForm(getSelectedLoadout());
+
+  if (activeChat && activeChat.loadoutId === loadout.id) {
+    await attachSelectedLoadoutToActiveChat();
+  }
+
+  setLoadoutStatus(
+    loadoutDirectory
+      ? `Deleted ${loadout.fileName || loadout.name} from ${loadoutDirectory}`
+      : `Deleted ${loadout.name}`
+  );
+}
+
+function createLoadoutDraft() {
+  persistEditingRoleToLoadout();
+  const loadout = normalizeLoadout(createLoadoutTemplate(loadouts.length + 1));
+  loadouts.push(loadout);
+  selectedLoadoutId = loadout.id;
+  editingLoadoutId = loadout.id;
+  syncLoadoutUI();
+  fillLoadoutForm(loadout);
+  renderLoadoutSelect();
+  setLoadoutStatus("New unsaved loadout draft created.");
 }
 
 async function saveCurrentCharacterToPc() {
@@ -389,28 +898,25 @@ async function saveCurrentCharacterToPc() {
   });
 
   const savedCharacter = normalizeCharacter(payload.character);
-  characterDirectory = payload.directory || characterDirectory;
-
-  const existingIndex = characters.findIndex((entry) => entry.id === savedCharacter.id);
-  if (existingIndex >= 0) {
-    characters.splice(existingIndex, 1, savedCharacter);
+  const index = characters.findIndex((entry) => entry.id === savedCharacter.id);
+  if (index >= 0) {
+    characters.splice(index, 1, savedCharacter);
   } else {
     characters.push(savedCharacter);
   }
 
   selectedCharacterId = savedCharacter.id;
   editingCharacterId = savedCharacter.id;
+  characterDirectory = payload.directory || characterDirectory;
   syncCharacterUI();
   renderCharacterTileGrid();
+  renderChatList();
   fillCharacterForm(savedCharacter);
-
-  if (pageType === "home") {
-    setCharacterFileStatus(
-      characterDirectory
-        ? `Saved to ${characterDirectory}\\${savedCharacter.fileName}`
-        : `Saved ${savedCharacter.fileName}`
-    );
-  }
+  setStatus(
+    characterDirectory
+      ? `Saved to ${characterDirectory}\\${savedCharacter.fileName}`
+      : `Saved ${savedCharacter.fileName}`
+  );
 }
 
 async function deleteCurrentCharacter() {
@@ -433,22 +939,22 @@ async function deleteCurrentCharacter() {
   characters = characters.filter((entry) => entry.id !== character.id);
   selectedCharacterId = characters[0]?.id || null;
   editingCharacterId = selectedCharacterId;
-
   syncCharacterUI();
   renderCharacterTileGrid();
+  renderChatList();
   fillCharacterForm(getSelectedCharacter());
+  setStatus(
+    characterDirectory
+      ? `Deleted ${character.fileName || character.name} from ${characterDirectory}`
+      : `Deleted ${character.name}`
+  );
 
   if (pageType === "home") {
-    setCharacterFileStatus(
-      characterDirectory
-        ? `Deleted ${character.fileName || character.name} from ${characterDirectory}`
-        : `Deleted ${character.name}`
-    );
     closeEditors();
   }
 }
 
-function createCharacter() {
+function createCharacterDraft() {
   const character = createCharacterTemplate(characters.length + 1);
   characters.push(character);
   selectedCharacterId = character.id;
@@ -464,29 +970,46 @@ function autosizeMessageEditor(textarea) {
   textarea.style.height = `${textarea.scrollHeight}px`;
 }
 
-function stopMessageEditing(message, saveChanges) {
-  const body = message.querySelector(".message-body");
+async function saveActiveChatEdits() {
+  if (!activeChat) {
+    return;
+  }
+
+  const payload = await apiRequest("/chats/save", {
+    method: "POST",
+    body: JSON.stringify({ chat: activeChat }),
+  });
+  activeChat = payload.chat;
+  updateChatSummary(activeChat);
+  renderChatList();
+}
+
+async function stopMessageEditing(messageElement, messageId, saveChanges) {
+  const body = messageElement.querySelector(".message-body");
   const paragraph = body?.querySelector("p");
   const editor = body?.querySelector(".message-inline-editor");
-
   if (!body || !paragraph || !editor) {
     return;
   }
 
-  if (saveChanges) {
-    paragraph.textContent = editor.value;
+  if (saveChanges && activeChat) {
+    const message = activeChat.messages.find((entry) => entry.id === messageId);
+    if (message) {
+      message.content = editor.value;
+      paragraph.textContent = editor.value;
+      await saveActiveChatEdits();
+    }
   }
 
   editor.remove();
   paragraph.hidden = false;
-  message.classList.remove("is-editing");
-  message.style.minHeight = "";
+  messageElement.classList.remove("is-editing");
+  messageElement.style.minHeight = "";
 }
 
-function startMessageEditing(message) {
-  const body = message.querySelector(".message-body");
+function startMessageEditing(messageElement, messageId) {
+  const body = messageElement.querySelector(".message-body");
   const paragraph = body?.querySelector("p");
-
   if (!body || !paragraph || body.querySelector(".message-inline-editor")) {
     return;
   }
@@ -496,36 +1019,79 @@ function startMessageEditing(message) {
   editor.value = paragraph.textContent.trim();
   editor.setAttribute("aria-label", "Edit message text");
 
-  message.style.minHeight = `${message.offsetHeight}px`;
+  messageElement.style.minHeight = `${messageElement.offsetHeight}px`;
   paragraph.hidden = true;
   body.appendChild(editor);
-  message.classList.add("is-editing");
+  messageElement.classList.add("is-editing");
 
   autosizeMessageEditor(editor);
   editor.style.minHeight = `${paragraph.offsetHeight}px`;
   editor.focus();
   editor.setSelectionRange(editor.value.length, editor.value.length);
 
-  editor.addEventListener("input", () => {
-    autosizeMessageEditor(editor);
-  });
-
+  editor.addEventListener("input", () => autosizeMessageEditor(editor));
   editor.addEventListener("blur", () => {
-    stopMessageEditing(message, true);
+    stopMessageEditing(messageElement, messageId, true);
   });
-
   editor.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       event.preventDefault();
-      stopMessageEditing(message, false);
+      stopMessageEditing(messageElement, messageId, false);
       return;
     }
-
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
-      stopMessageEditing(message, true);
+      stopMessageEditing(messageElement, messageId, true);
     }
   });
+}
+
+async function sendCurrentMessage() {
+  if (!composerInput || isSending) {
+    return;
+  }
+
+  const content = composerInput.value.trim();
+  if (!content) {
+    return;
+  }
+
+  if (!activeChat) {
+    await createNewChat();
+  }
+
+  if (!activeChat) {
+    return;
+  }
+
+  isSending = true;
+  setComposerDisabled(true);
+
+  try {
+    const payload = await apiRequest("/chats/message", {
+      method: "POST",
+      body: JSON.stringify({
+        chatFileName: activeChat.fileName,
+        content,
+      }),
+    });
+
+    activeChat = payload.chat;
+    selectedCharacterId = activeChat.characterId;
+    editingCharacterId = selectedCharacterId;
+    composerInput.value = "";
+    autosizeComposer();
+    updateChatSummary(activeChat);
+    syncCharacterUI();
+    renderChatList();
+    renderActiveChat();
+  } catch (error) {
+    setStatus(error.message || "Sending message failed.");
+  } finally {
+    isSending = false;
+    setComposerDisabled(false);
+    composerInput?.focus();
+  }
 }
 
 function closeEditors() {
@@ -537,42 +1103,32 @@ function closeEditors() {
   if (defaultSurface) {
     defaultSurface.removeAttribute("aria-hidden");
   }
-
-  syncCharacterUI();
 }
 
 function setRole(roleKey) {
+  persistEditingRoleToLoadout();
   const role = roleData[roleKey];
   if (!role) {
     return;
   }
 
+  activeRoleKey = roleKey;
+
   roleButtons.forEach((button) => {
-    const isActive = button.getAttribute("data-role-select") === roleKey;
-    button.classList.toggle("is-active", isActive);
+    button.classList.toggle(
+      "is-active",
+      button.getAttribute("data-role-select") === roleKey
+    );
   });
 
-  if (roleTitle) {
-    roleTitle.textContent = role.title;
-  }
-  if (roleLlm) {
-    roleLlm.value = role.llm;
-  }
-  if (roleTemperature) {
-    roleTemperature.value = role.temperature;
-  }
-  if (roleTopP) {
-    roleTopP.value = role.topP;
-  }
-  if (roleMaxTokens) {
-    roleMaxTokens.value = role.maxTokens;
-  }
-  if (roleInstructions) {
-    roleInstructions.value = role.instructions;
-  }
-  if (defaultInstructions) {
-    defaultInstructions.value = role.defaults;
-  }
+  const activeRole = getEditingLoadout()?.roles?.[roleKey] || role;
+  if (roleTitle) roleTitle.textContent = role.title;
+  if (roleLlm) roleLlm.value = activeRole.llm;
+  if (roleTemperature) roleTemperature.value = activeRole.temperature;
+  if (roleTopP) roleTopP.value = activeRole.topP;
+  if (roleMaxTokens) roleMaxTokens.value = activeRole.maxTokens;
+  if (roleInstructions) roleInstructions.value = activeRole.instructions;
+  if (defaultInstructions) defaultInstructions.value = activeRole.defaults;
 }
 
 function openEditor(targetId) {
@@ -586,12 +1142,49 @@ function openEditor(targetId) {
   if (targetId === "character-editor") {
     fillCharacterForm(getEditingCharacter() || getSelectedCharacter());
   }
+  if (targetId === "model-editor") {
+    fillLoadoutForm(getEditingLoadout() || getSelectedLoadout());
+  }
 
   target.classList.add("is-open");
   target.setAttribute("aria-hidden", "false");
 
   if (defaultSurface) {
     defaultSurface.setAttribute("aria-hidden", "true");
+  }
+}
+
+async function initializeHome() {
+  await Promise.all([loadCharactersFromPc(), loadLoadoutsFromPc(), loadChatsFromPc()]);
+  if (!selectedCharacterId && characters.length) {
+    selectedCharacterId = characters[0].id;
+    editingCharacterId = selectedCharacterId;
+  }
+  syncCharacterUI();
+  renderCharacterTileGrid();
+  renderChatList();
+  fillCharacterForm(getSelectedCharacter());
+  if (characterDirectory) {
+    setStatus(`Characters loaded from ${characterDirectory}`);
+  }
+}
+
+async function initializeChat() {
+  await Promise.all([loadCharactersFromPc(), loadLoadoutsFromPc(), loadChatsFromPc()]);
+  const params = new URLSearchParams(window.location.search);
+  const requestedChat = params.get("chat");
+
+  if (requestedChat) {
+    await loadActiveChat(requestedChat);
+  } else if (chats.length) {
+    await loadActiveChat(chats[0].fileName);
+  } else {
+    renderActiveChat();
+  }
+
+  syncLoadoutUI();
+  if (loadoutDirectory) {
+    setLoadoutStatus(`Model loadouts loaded from ${loadoutDirectory}`);
   }
 }
 
@@ -607,15 +1200,9 @@ document.querySelectorAll("[data-close-editor]").forEach((button) => {
   });
 });
 
-messageEditButtons.forEach((button) => {
-  button.addEventListener("click", () => {
-    const message = button.closest(".message");
-    if (!message) {
-      return;
-    }
-
-    startMessageEditing(message);
-  });
+selectedLoadoutButton?.addEventListener("click", () => {
+  renderLoadoutSwitchMenu();
+  setLoadoutMenuOpen(!isLoadoutMenuOpen);
 });
 
 roleButtons.forEach((button) => {
@@ -626,13 +1213,40 @@ roleButtons.forEach((button) => {
 
 saveCharacterButton?.addEventListener("click", () => {
   saveCurrentCharacterToPc().catch((error) => {
-    setCharacterFileStatus(error.message || "Save failed.");
+    setStatus(error.message || "Save failed.");
   });
 });
 
 deleteCharacterButton?.addEventListener("click", () => {
   deleteCurrentCharacter().catch((error) => {
-    setCharacterFileStatus(error.message || "Delete failed.");
+    setStatus(error.message || "Delete failed.");
+  });
+});
+
+saveLoadoutButton?.addEventListener("click", () => {
+  saveCurrentLoadoutToPc().catch((error) => {
+    setLoadoutStatus(error.message || "Save failed.");
+  });
+});
+
+deleteLoadoutButton?.addEventListener("click", () => {
+  deleteCurrentLoadout().catch((error) => {
+    setLoadoutStatus(error.message || "Delete failed.");
+  });
+});
+
+newLoadoutButton?.addEventListener("click", () => {
+  createLoadoutDraft();
+});
+
+loadoutSelect?.addEventListener("change", () => {
+  persistEditingRoleToLoadout();
+  editingLoadoutId = loadoutSelect.value;
+  selectedLoadoutId = editingLoadoutId;
+  syncLoadoutUI();
+  fillLoadoutForm(getEditingLoadout());
+  attachSelectedLoadoutToActiveChat().catch((error) => {
+    setLoadoutStatus(error.message || "Failed to apply loadout to chat.");
   });
 });
 
@@ -640,46 +1254,85 @@ characterNameInput?.addEventListener("input", () => {
   updateCharacterTitles(characterNameInput.value);
 });
 
-characterImageFileInput?.addEventListener("change", async (event) => {
-  const input = event.currentTarget;
-  const file = input?.files?.[0];
+loadoutTitleInput?.addEventListener("input", () => {
+  const loadout = getEditingLoadout();
+  if (!loadout) {
+    return;
+  }
+  loadout.name = loadoutTitleInput.value.trim() || "Model Loadout";
+  renderLoadoutSelect();
+  if (selectedLoadoutId === loadout.id) {
+    syncLoadoutUI();
+  }
+});
+
+characterImageFileInput?.addEventListener("change", (event) => {
+  const file = event.currentTarget?.files?.[0];
   if (!file) {
     return;
   }
 
   const reader = new FileReader();
   reader.onload = () => {
-    const result = typeof reader.result === "string" ? reader.result : "";
     const current = getEditingCharacter();
-    if (current) {
-      current.image = result || DEFAULT_CHARACTER_IMAGE;
+    if (!current) {
+      return;
     }
-    const previewName = characterNameInput?.value?.trim() || "Character";
+    current.image = typeof reader.result === "string" ? reader.result : DEFAULT_CHARACTER_IMAGE;
     applyCharacterImage(
       characterPortraitPreview,
-      (current?.image || DEFAULT_CHARACTER_IMAGE).trim(),
-      `${previewName} portrait preview`
+      current.image,
+      `${characterNameInput?.value?.trim() || "Character"} portrait preview`
     );
   };
   reader.readAsDataURL(file);
 });
 
-async function initializeCharacters() {
-  try {
-    await loadCharactersFromPc();
-  } catch (error) {
-    characters = [];
-    selectedCharacterId = null;
-    editingCharacterId = null;
-    renderCharacterTileGrid();
-    syncCharacterUI();
-    if (pageType === "home") {
-      setCharacterFileStatus(
-        "Character save service is unavailable. Start the local character server."
-      );
-    }
+composerInput?.addEventListener("input", () => {
+  autosizeComposer();
+});
+
+composerInput?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    sendCurrentMessage();
   }
-}
+});
+
+sendMessageButton?.addEventListener("click", () => {
+  sendCurrentMessage();
+});
+
+document.addEventListener("click", (event) => {
+  if (!isLoadoutMenuOpen || !selectedLoadoutButton || !loadoutSwitchMenu) {
+    return;
+  }
+
+  const target = event.target;
+  if (
+    target instanceof Node &&
+    !selectedLoadoutButton.contains(target) &&
+    !loadoutSwitchMenu.contains(target)
+  ) {
+    setLoadoutMenuOpen(false);
+  }
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && isLoadoutMenuOpen) {
+    setLoadoutMenuOpen(false);
+  }
+});
 
 setRole("mind");
-initializeCharacters();
+autosizeComposer();
+
+if (pageType === "chat") {
+  initializeChat().catch((error) => {
+    setLoadoutStatus(error.message || "Failed to initialize chat.");
+  });
+} else {
+  initializeHome().catch((error) => {
+    setStatus(error.message || "Failed to initialize home.");
+  });
+}

@@ -1,0 +1,47 @@
+{
+  "id": "loadout-1",
+  "name": "Model Loadout 1",
+  "roles": {
+    "mind": {
+      "llm": "gpt-oss-cinematic",
+      "temperature": "1.05",
+      "topP": "0.92",
+      "maxTokens": "4096",
+      "instructions": "Coordinate the overall reasoning pass, track the current scene state, and decide which specialist models should influence the next response.",
+      "defaults": "Stay consistent with the active character, preserve user agency, keep outputs machine-readable when required, and avoid contradicting established chat memory."
+    },
+    "author": {
+      "llm": "deepseek/deepseek-chat-v3.1",
+      "temperature": "0.90",
+      "topP": "0.95",
+      "maxTokens": "700",
+      "instructions": "Write the final visible in-character assistant response using the selected character's voice and the current chat context.",
+      "defaults": "Stay in character, respond conversationally, preserve user agency, and continue the scene naturally from the conversation history."
+    },
+    "stat": {
+      "llm": "gpt-oss-structured",
+      "temperature": "0.35",
+      "topP": "0.80",
+      "maxTokens": "1024",
+      "instructions": "Update meters, traits, inventories, cooldowns, and internal numeric state with deterministic formatting and no decorative prose.",
+      "defaults": "Prefer exactness over flourish, preserve schema stability, and avoid changing untouched state."
+    },
+    "event": {
+      "llm": "gpt-oss-sim",
+      "temperature": "0.88",
+      "topP": "0.90",
+      "maxTokens": "2048",
+      "instructions": "Resolve world events, trigger scene beats, and produce compact event summaries that the mind and author models can consume.",
+      "defaults": "Honor prior causality, avoid random escalation without setup, and keep event outputs concise and structured."
+    },
+    "goal": {
+      "llm": "gpt-oss-planner",
+      "temperature": "0.64",
+      "topP": "0.85",
+      "maxTokens": "1536",
+      "instructions": "Track character motivations, evaluate short-term objectives, and suggest next-scene priorities based on the current state.",
+      "defaults": "Preserve long-term consistency, avoid contradictory motivations, and make goals legible to the other specialist models."
+    }
+  },
+  "fileName": "Model Loadout 1.json"
+}
