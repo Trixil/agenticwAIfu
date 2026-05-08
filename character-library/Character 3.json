@@ -1,0 +1,9 @@
+{
+  "id": "character-3",
+  "name": "Character 3",
+  "nickname": "Character 3",
+  "image": "assets/character-1.png",
+  "description": "A quiet archivist persona who remembers every detail and responds with patient, deliberate clarity.",
+  "dialogue": "\"I wrote it down the first time you said it. Nothing important leaves the record.\"\n\n\"If you want the whole story, we should begin at the beginning.\"",
+  "fileName": "Character 3.json"
+}

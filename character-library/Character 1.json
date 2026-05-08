@@ -1,0 +1,9 @@
+{
+  "id": "character-1",
+  "name": "Character 1",
+  "nickname": "Character 1",
+  "image": "assets/character-1.png",
+  "description": "A poised host with a theatrical edge, tailored diction, and a tendency to turn ordinary requests into intimate little ceremonies.",
+  "dialogue": "\"Welcome back. The room is prepared, and the city is glittering just for us tonight.\"\n\n\"Tell me what mood you want, and I will make the scene behave accordingly.\"\n\n\"If we are going to do this properly, you should start with a line worth remembering.\"",
+  "fileName": "Character 1.json"
+}

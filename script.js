@@ -1,8 +1,14 @@
+const DEFAULT_CHARACTER_IMAGE = "assets/character-1.png";
+const CHARACTER_API = "http://127.0.0.1:4317/api";
+
+const pageType = document.body.dataset.page || "home";
+
 const overlays = Array.from(document.querySelectorAll(".editor-overlay"));
 const defaultSurface = document.getElementById("default-surface");
 const messageEditButtons = Array.from(
   document.querySelectorAll(".message-edit-button")
 );
+
 const roleButtons = Array.from(document.querySelectorAll("[data-role-select]"));
 const roleTitle = document.getElementById("loadout-role-title");
 const roleLlm = document.getElementById("editor-role-llm");
@@ -11,6 +17,31 @@ const roleTopP = document.getElementById("editor-top-p");
 const roleMaxTokens = document.getElementById("editor-max-tokens");
 const roleInstructions = document.getElementById("editor-role-instructions");
 const defaultInstructions = document.getElementById("editor-default-instructions");
+
+const characterTileGrid = document.getElementById("character-tile-grid");
+const saveCharacterButton = document.getElementById("save-character-button");
+const deleteCharacterButton = document.getElementById("delete-character-button");
+const characterFileStatus = document.getElementById("character-file-status");
+const characterDetailTitle = document.getElementById("character-detail-title");
+const characterNameInput = document.getElementById("editor-character-name");
+const characterNicknameInput = document.getElementById("editor-character-nickname");
+const characterImageFileInput = document.getElementById("editor-character-image-file");
+const characterPortraitPreview = document.getElementById(
+  "editor-character-portrait-preview"
+);
+const characterDescriptionInput = document.getElementById(
+  "editor-character-description"
+);
+const characterDialogueInput = document.getElementById("editor-character-dialogue");
+
+const selectedCharacterName = document.getElementById("selected-character-name");
+const selectedCharacterImage = document.getElementById("selected-character-image");
+const chatCharacterSubtitle = document.getElementById("chat-character-subtitle");
+const primaryCharacterLabel = document.getElementById("primary-character-label");
+const secondaryCharacterLabel = document.getElementById("secondary-character-label");
+const characterDrivenAvatars = Array.from(
+  document.querySelectorAll(".character-driven-avatar")
+);
 
 const roleData = {
   mind: {
@@ -70,6 +101,364 @@ const roleData = {
   },
 };
 
+let characters = [];
+let selectedCharacterId = null;
+let editingCharacterId = null;
+let characterDirectory = "";
+
+function setCharacterFileStatus(message) {
+  if (characterFileStatus) {
+    characterFileStatus.textContent = message;
+  }
+}
+
+function makeCharacterId() {
+  if (window.crypto?.randomUUID) {
+    return window.crypto.randomUUID();
+  }
+
+  return `character-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function createCharacterTemplate(index = 1) {
+  return {
+    id: makeCharacterId(),
+    name: `Character ${index}`,
+    nickname: `Character ${index}`,
+    image: DEFAULT_CHARACTER_IMAGE,
+    description: "",
+    dialogue: "",
+    fileName: null,
+  };
+}
+
+function normalizeCharacter(character) {
+  return {
+    id: character?.id || makeCharacterId(),
+    name: (character?.name || "Untitled Character").trim(),
+    nickname: (character?.nickname || character?.name || "Character").trim(),
+    image: (character?.image || DEFAULT_CHARACTER_IMAGE).trim(),
+    description: character?.description ?? "",
+    dialogue: character?.dialogue ?? "",
+    fileName: character?.fileName || null,
+  };
+}
+
+function getCharacterById(id) {
+  return characters.find((character) => character.id === id) ?? null;
+}
+
+function getSelectedCharacter() {
+  return getCharacterById(selectedCharacterId);
+}
+
+function getEditingCharacter() {
+  return getCharacterById(editingCharacterId);
+}
+
+function getCharacterDisplayName(character) {
+  return character?.nickname?.trim() || character?.name?.trim() || "Character";
+}
+
+function getCharacterImage(character) {
+  return character?.image?.trim() || DEFAULT_CHARACTER_IMAGE;
+}
+
+function applyCharacterImage(img, source, altText) {
+  if (!img) {
+    return;
+  }
+
+  img.src = source;
+  img.alt = altText;
+  img.onerror = () => {
+    if (img.src.endsWith(DEFAULT_CHARACTER_IMAGE)) {
+      return;
+    }
+
+    img.onerror = null;
+    img.src = DEFAULT_CHARACTER_IMAGE;
+  };
+}
+
+function updateCharacterTitles(nameValue) {
+  const title = nameValue.trim() || "Untitled Character";
+  if (characterDetailTitle) {
+    characterDetailTitle.textContent = title;
+  }
+}
+
+function fillCharacterForm(character) {
+  if (!character || !characterNameInput) {
+    return;
+  }
+
+  editingCharacterId = character.id;
+  characterNameInput.value = character.name;
+  characterNicknameInput.value = character.nickname;
+  characterDescriptionInput.value = character.description;
+  characterDialogueInput.value = character.dialogue;
+  updateCharacterTitles(character.name);
+  applyCharacterImage(
+    characterPortraitPreview,
+    getCharacterImage(character),
+    `${character.name} portrait preview`
+  );
+  if (characterImageFileInput) {
+    characterImageFileInput.value = "";
+  }
+}
+
+function readCharacterForm() {
+  const name = characterNameInput.value.trim() || "Untitled Character";
+  const nickname = characterNicknameInput.value.trim() || name;
+
+  return {
+    name,
+    nickname,
+    image: getEditingCharacter()?.image?.trim() || DEFAULT_CHARACTER_IMAGE,
+    description: characterDescriptionInput.value,
+    dialogue: characterDialogueInput.value,
+  };
+}
+
+function syncCharacterUI() {
+  const character = getSelectedCharacter();
+
+  if (!character) {
+    if (selectedCharacterName) {
+      selectedCharacterName.textContent = "No Character";
+    }
+    if (chatCharacterSubtitle) {
+      chatCharacterSubtitle.textContent = "No Character";
+    }
+    if (primaryCharacterLabel) {
+      primaryCharacterLabel.textContent = "Character";
+    }
+    if (secondaryCharacterLabel) {
+      secondaryCharacterLabel.textContent = "Character";
+    }
+    applyCharacterImage(selectedCharacterImage, DEFAULT_CHARACTER_IMAGE, "Character portrait");
+    characterDrivenAvatars.forEach((avatar) => {
+      applyCharacterImage(avatar, DEFAULT_CHARACTER_IMAGE, "Character avatar");
+    });
+    return;
+  }
+
+  const displayName = getCharacterDisplayName(character);
+  const image = getCharacterImage(character);
+
+  if (selectedCharacterName) {
+    selectedCharacterName.textContent = character.name;
+  }
+  if (chatCharacterSubtitle) {
+    chatCharacterSubtitle.textContent = displayName;
+  }
+  if (primaryCharacterLabel) {
+    primaryCharacterLabel.textContent = displayName;
+  }
+  if (secondaryCharacterLabel) {
+    secondaryCharacterLabel.textContent = displayName;
+  }
+
+  applyCharacterImage(selectedCharacterImage, image, `${character.name} portrait`);
+  characterDrivenAvatars.forEach((avatar) => {
+    applyCharacterImage(avatar, image, `${displayName} avatar`);
+  });
+}
+
+function renderCharacterTileGrid() {
+  if (!characterTileGrid) {
+    return;
+  }
+
+  characterTileGrid.innerHTML = "";
+
+  if (pageType === "home") {
+    const addTile = document.createElement("button");
+    addTile.type = "button";
+    addTile.className = "character-tile character-tile-add";
+    addTile.setAttribute("aria-label", "Create new character");
+    addTile.innerHTML = `
+      <div class="character-tile-image-wrap character-tile-add-visual">
+        <span class="character-tile-plus">+</span>
+      </div>
+      <strong class="character-tile-name">New Character</strong>
+    `;
+    addTile.addEventListener("click", () => {
+      createCharacter();
+    });
+    characterTileGrid.appendChild(addTile);
+  }
+
+  characters.forEach((character) => {
+    const tile = document.createElement("button");
+    tile.type = "button";
+    tile.className = "character-tile";
+    if (character.id === selectedCharacterId) {
+      tile.classList.add("is-active");
+    }
+
+    const imageWrap = document.createElement("div");
+    imageWrap.className = "character-tile-image-wrap";
+
+    const image = document.createElement("img");
+    image.className = "character-tile-image";
+    applyCharacterImage(image, getCharacterImage(character), `${character.name} portrait`);
+
+    const name = document.createElement("strong");
+    name.className = "character-tile-name";
+    name.textContent = character.name;
+
+    imageWrap.appendChild(image);
+    tile.append(imageWrap, name);
+
+    tile.addEventListener("click", () => {
+      selectedCharacterId = character.id;
+      editingCharacterId = character.id;
+      syncCharacterUI();
+      fillCharacterForm(character);
+      renderCharacterTileGrid();
+      openEditor("character-editor");
+    });
+
+    characterTileGrid.appendChild(tile);
+  });
+}
+
+async function apiRequest(path, options = {}) {
+  const response = await fetch(`${CHARACTER_API}${path}`, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
+  });
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.error || "Character API request failed.");
+  }
+
+  return response.json();
+}
+
+async function loadCharactersFromPc() {
+  const payload = await apiRequest("/characters", { method: "GET" });
+  characters = (payload.characters || []).map((character) => normalizeCharacter(character));
+  characterDirectory = payload.directory || "";
+
+  if (characters.length === 0 && pageType === "home") {
+    characters = [];
+    selectedCharacterId = null;
+    editingCharacterId = null;
+  } else {
+    selectedCharacterId =
+      characters.find((character) => character.id === selectedCharacterId)?.id ||
+      characters[0]?.id ||
+      null;
+    editingCharacterId = selectedCharacterId;
+  }
+
+  syncCharacterUI();
+  renderCharacterTileGrid();
+  fillCharacterForm(getSelectedCharacter());
+
+  if (pageType === "home" && characterDirectory) {
+    setCharacterFileStatus(`Characters loaded from ${characterDirectory}`);
+  }
+}
+
+async function saveCurrentCharacterToPc() {
+  const character = getEditingCharacter();
+  if (!character) {
+    throw new Error("No character selected.");
+  }
+
+  const draft = {
+    ...character,
+    ...readCharacterForm(),
+  };
+
+  const payload = await apiRequest("/characters/save", {
+    method: "POST",
+    body: JSON.stringify({
+      character: draft,
+      previousFileName: character.fileName || null,
+    }),
+  });
+
+  const savedCharacter = normalizeCharacter(payload.character);
+  characterDirectory = payload.directory || characterDirectory;
+
+  const existingIndex = characters.findIndex((entry) => entry.id === savedCharacter.id);
+  if (existingIndex >= 0) {
+    characters.splice(existingIndex, 1, savedCharacter);
+  } else {
+    characters.push(savedCharacter);
+  }
+
+  selectedCharacterId = savedCharacter.id;
+  editingCharacterId = savedCharacter.id;
+  syncCharacterUI();
+  renderCharacterTileGrid();
+  fillCharacterForm(savedCharacter);
+
+  if (pageType === "home") {
+    setCharacterFileStatus(
+      characterDirectory
+        ? `Saved to ${characterDirectory}\\${savedCharacter.fileName}`
+        : `Saved ${savedCharacter.fileName}`
+    );
+  }
+}
+
+async function deleteCurrentCharacter() {
+  const character = getEditingCharacter();
+  if (!character) {
+    return;
+  }
+
+  const confirmed = window.confirm(`Delete ${character.name}?`);
+  if (!confirmed) {
+    return;
+  }
+
+  if (character.fileName) {
+    await apiRequest(`/characters/${encodeURIComponent(character.fileName)}`, {
+      method: "DELETE",
+    });
+  }
+
+  characters = characters.filter((entry) => entry.id !== character.id);
+  selectedCharacterId = characters[0]?.id || null;
+  editingCharacterId = selectedCharacterId;
+
+  syncCharacterUI();
+  renderCharacterTileGrid();
+  fillCharacterForm(getSelectedCharacter());
+
+  if (pageType === "home") {
+    setCharacterFileStatus(
+      characterDirectory
+        ? `Deleted ${character.fileName || character.name} from ${characterDirectory}`
+        : `Deleted ${character.name}`
+    );
+    closeEditors();
+  }
+}
+
+function createCharacter() {
+  const character = createCharacterTemplate(characters.length + 1);
+  characters.push(character);
+  selectedCharacterId = character.id;
+  editingCharacterId = character.id;
+  syncCharacterUI();
+  renderCharacterTileGrid();
+  fillCharacterForm(character);
+  openEditor("character-editor");
+}
+
 function autosizeMessageEditor(textarea) {
   textarea.style.height = "0px";
   textarea.style.height = `${textarea.scrollHeight}px`;
@@ -108,7 +497,6 @@ function startMessageEditing(message) {
   editor.setAttribute("aria-label", "Edit message text");
 
   message.style.minHeight = `${message.offsetHeight}px`;
-
   paragraph.hidden = true;
   body.appendChild(editor);
   message.classList.add("is-editing");
@@ -149,6 +537,8 @@ function closeEditors() {
   if (defaultSurface) {
     defaultSurface.removeAttribute("aria-hidden");
   }
+
+  syncCharacterUI();
 }
 
 function setRole(roleKey) {
@@ -165,27 +555,21 @@ function setRole(roleKey) {
   if (roleTitle) {
     roleTitle.textContent = role.title;
   }
-
   if (roleLlm) {
     roleLlm.value = role.llm;
   }
-
   if (roleTemperature) {
     roleTemperature.value = role.temperature;
   }
-
   if (roleTopP) {
     roleTopP.value = role.topP;
   }
-
   if (roleMaxTokens) {
     roleMaxTokens.value = role.maxTokens;
   }
-
   if (roleInstructions) {
     roleInstructions.value = role.instructions;
   }
-
   if (defaultInstructions) {
     defaultInstructions.value = role.defaults;
   }
@@ -197,6 +581,10 @@ function openEditor(targetId) {
   const target = document.getElementById(targetId);
   if (!target) {
     return;
+  }
+
+  if (targetId === "character-editor") {
+    fillCharacterForm(getEditingCharacter() || getSelectedCharacter());
   }
 
   target.classList.add("is-open");
@@ -236,4 +624,62 @@ roleButtons.forEach((button) => {
   });
 });
 
+saveCharacterButton?.addEventListener("click", () => {
+  saveCurrentCharacterToPc().catch((error) => {
+    setCharacterFileStatus(error.message || "Save failed.");
+  });
+});
+
+deleteCharacterButton?.addEventListener("click", () => {
+  deleteCurrentCharacter().catch((error) => {
+    setCharacterFileStatus(error.message || "Delete failed.");
+  });
+});
+
+characterNameInput?.addEventListener("input", () => {
+  updateCharacterTitles(characterNameInput.value);
+});
+
+characterImageFileInput?.addEventListener("change", async (event) => {
+  const input = event.currentTarget;
+  const file = input?.files?.[0];
+  if (!file) {
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    const result = typeof reader.result === "string" ? reader.result : "";
+    const current = getEditingCharacter();
+    if (current) {
+      current.image = result || DEFAULT_CHARACTER_IMAGE;
+    }
+    const previewName = characterNameInput?.value?.trim() || "Character";
+    applyCharacterImage(
+      characterPortraitPreview,
+      (current?.image || DEFAULT_CHARACTER_IMAGE).trim(),
+      `${previewName} portrait preview`
+    );
+  };
+  reader.readAsDataURL(file);
+});
+
+async function initializeCharacters() {
+  try {
+    await loadCharactersFromPc();
+  } catch (error) {
+    characters = [];
+    selectedCharacterId = null;
+    editingCharacterId = null;
+    renderCharacterTileGrid();
+    syncCharacterUI();
+    if (pageType === "home") {
+      setCharacterFileStatus(
+        "Character save service is unavailable. Start the local character server."
+      );
+    }
+  }
+}
+
 setRole("mind");
+initializeCharacters();

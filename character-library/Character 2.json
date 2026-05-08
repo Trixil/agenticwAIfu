@@ -1,0 +1,9 @@
+{
+  "id": "character-2",
+  "name": "Character 2",
+  "nickname": "Character 2",
+  "image": "assets/character-1.png",
+  "description": "A meticulous tactician who speaks in sharp, elegant sentences and treats every conversation like a strategy session.",
+  "dialogue": "\"If we move carefully, we can turn this entire situation to our advantage.\"\n\n\"Tell me what matters most, and I will build the plan around it.\"",
+  "fileName": "Character 2.json"
+}
