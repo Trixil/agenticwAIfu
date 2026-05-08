@@ -21,7 +21,6 @@ const roleTemperature = document.getElementById("editor-temperature");
 const roleTopP = document.getElementById("editor-top-p");
 const roleMaxTokens = document.getElementById("editor-max-tokens");
 const roleInstructions = document.getElementById("editor-role-instructions");
-const defaultInstructions = document.getElementById("editor-default-instructions");
 const loadoutSelect = document.getElementById("loadout-select");
 const newLoadoutButton = document.getElementById("new-loadout-button");
 const saveLoadoutButton = document.getElementById("save-loadout-button");
@@ -59,8 +58,6 @@ const roleData = {
     maxTokens: "4096",
     instructions:
       "Coordinate the overall reasoning pass, track the current scene state, and decide which specialist models should influence the next response.",
-    defaults:
-      "Stay consistent with the active character, preserve user agency, keep outputs machine-readable when required, and avoid contradicting established chat memory.",
   },
   author: {
     title: "Author Model",
@@ -70,8 +67,15 @@ const roleData = {
     maxTokens: "700",
     instructions:
       "Write the final visible in-character assistant response using the selected character's voice and the current chat context.",
-    defaults:
-      "Stay in character, respond conversationally, preserve user agency, and continue the scene naturally from the conversation history.",
+  },
+  continuity: {
+    title: "Continuity Model",
+    llm: "gpt-oss-continuity",
+    temperature: "0.45",
+    topP: "0.82",
+    maxTokens: "1536",
+    instructions:
+      "Track scene continuity, relationship state, established facts, and unresolved threads so the rest of the loadout stays consistent with prior chat history.",
   },
   stat: {
     title: "Stat Model",
@@ -81,8 +85,6 @@ const roleData = {
     maxTokens: "1024",
     instructions:
       "Update meters, traits, inventories, cooldowns, and internal numeric state with deterministic formatting and no decorative prose.",
-    defaults:
-      "Prefer exactness over flourish, preserve schema stability, and avoid changing untouched state.",
   },
   event: {
     title: "Event Model",
@@ -92,8 +94,6 @@ const roleData = {
     maxTokens: "2048",
     instructions:
       "Resolve world events, trigger scene beats, and produce compact event summaries that the mind and author models can consume.",
-    defaults:
-      "Honor prior causality, avoid random escalation without setup, and keep event outputs concise and structured.",
   },
   goal: {
     title: "Goal Model",
@@ -103,8 +103,6 @@ const roleData = {
     maxTokens: "1536",
     instructions:
       "Track character motivations, evaluate short-term objectives, and suggest next-scene priorities based on the current state.",
-    defaults:
-      "Preserve long-term consistency, avoid contradictory motivations, and make goals legible to the other specialist models.",
   },
 };
 
@@ -160,6 +158,17 @@ function createLoadoutTemplate(index = 1) {
     name: `Model Loadout ${index}`,
     fileName: null,
     roles: JSON.parse(JSON.stringify(roleData)),
+  };
+}
+
+function normalizeRoleConfig(roleKey, role) {
+  const fallback = roleData[roleKey];
+  return {
+    llm: role?.llm ?? fallback.llm,
+    temperature: role?.temperature ?? fallback.temperature,
+    topP: role?.topP ?? fallback.topP,
+    maxTokens: role?.maxTokens ?? fallback.maxTokens,
+    instructions: role?.instructions ?? fallback.instructions,
   };
 }
 
@@ -316,11 +325,12 @@ function normalizeLoadout(loadout) {
     name: (loadout?.name || fallback.name).trim(),
     fileName: loadout?.fileName || null,
     roles: {
-      mind: { ...roleData.mind, ...(loadout?.roles?.mind || {}) },
-      author: { ...roleData.author, ...(loadout?.roles?.author || {}) },
-      stat: { ...roleData.stat, ...(loadout?.roles?.stat || {}) },
-      event: { ...roleData.event, ...(loadout?.roles?.event || {}) },
-      goal: { ...roleData.goal, ...(loadout?.roles?.goal || {}) },
+      mind: normalizeRoleConfig("mind", loadout?.roles?.mind),
+      author: normalizeRoleConfig("author", loadout?.roles?.author),
+      continuity: normalizeRoleConfig("continuity", loadout?.roles?.continuity),
+      stat: normalizeRoleConfig("stat", loadout?.roles?.stat),
+      event: normalizeRoleConfig("event", loadout?.roles?.event),
+      goal: normalizeRoleConfig("goal", loadout?.roles?.goal),
     },
   };
 }
@@ -425,7 +435,6 @@ function fillLoadoutForm(loadout) {
   if (roleTopP) roleTopP.value = role.topP || "";
   if (roleMaxTokens) roleMaxTokens.value = role.maxTokens || "";
   if (roleInstructions) roleInstructions.value = role.instructions || "";
-  if (defaultInstructions) defaultInstructions.value = role.defaults || "";
   renderLoadoutSelect();
 }
 
@@ -442,7 +451,6 @@ function persistEditingRoleToLoadout() {
     topP: roleTopP?.value || "",
     maxTokens: roleMaxTokens?.value || "",
     instructions: roleInstructions?.value || "",
-    defaults: defaultInstructions?.value || "",
   };
 }
 
@@ -1128,7 +1136,6 @@ function setRole(roleKey) {
   if (roleTopP) roleTopP.value = activeRole.topP;
   if (roleMaxTokens) roleMaxTokens.value = activeRole.maxTokens;
   if (roleInstructions) roleInstructions.value = activeRole.instructions;
-  if (defaultInstructions) defaultInstructions.value = activeRole.defaults;
 }
 
 function openEditor(targetId) {

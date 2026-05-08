@@ -87,8 +87,6 @@ const defaultLoadouts = [
         maxTokens: "4096",
         instructions:
           "Coordinate the overall reasoning pass, track the current scene state, and decide which specialist models should influence the next response.",
-        defaults:
-          "Stay consistent with the active character, preserve user agency, keep outputs machine-readable when required, and avoid contradicting established chat memory.",
       },
       author: {
         llm: OPENROUTER_AUTHOR_MODEL,
@@ -97,8 +95,14 @@ const defaultLoadouts = [
         maxTokens: "700",
         instructions:
           "Write the final visible in-character assistant response using the selected character's voice and the current chat context.",
-        defaults:
-          "Stay in character, respond conversationally, preserve user agency, and continue the scene naturally from the conversation history.",
+      },
+      continuity: {
+        llm: "gpt-oss-continuity",
+        temperature: "0.45",
+        topP: "0.82",
+        maxTokens: "1536",
+        instructions:
+          "Track scene continuity, relationship state, established facts, and unresolved threads so the rest of the loadout stays consistent with prior chat history.",
       },
       stat: {
         llm: "gpt-oss-structured",
@@ -107,8 +111,6 @@ const defaultLoadouts = [
         maxTokens: "1024",
         instructions:
           "Update meters, traits, inventories, cooldowns, and internal numeric state with deterministic formatting and no decorative prose.",
-        defaults:
-          "Prefer exactness over flourish, preserve schema stability, and avoid changing untouched state.",
       },
       event: {
         llm: "gpt-oss-sim",
@@ -117,8 +119,6 @@ const defaultLoadouts = [
         maxTokens: "2048",
         instructions:
           "Resolve world events, trigger scene beats, and produce compact event summaries that the mind and author models can consume.",
-        defaults:
-          "Honor prior causality, avoid random escalation without setup, and keep event outputs concise and structured.",
       },
       goal: {
         llm: "gpt-oss-planner",
@@ -127,12 +127,56 @@ const defaultLoadouts = [
         maxTokens: "1536",
         instructions:
           "Track character motivations, evaluate short-term objectives, and suggest next-scene priorities based on the current state.",
-        defaults:
-          "Preserve long-term consistency, avoid contradictory motivations, and make goals legible to the other specialist models.",
       },
     },
   },
 ];
+
+function defaultRoleConfig(role) {
+  return {
+    llm: role.llm,
+    temperature: role.temperature,
+    topP: role.topP,
+    maxTokens: role.maxTokens,
+    instructions: role.instructions,
+  };
+}
+
+function sanitizeRole(role, fallbackRole) {
+  return {
+    llm: role?.llm ?? fallbackRole.llm,
+    temperature: role?.temperature ?? fallbackRole.temperature,
+    topP: role?.topP ?? fallbackRole.topP,
+    maxTokens: role?.maxTokens ?? fallbackRole.maxTokens,
+    instructions: role?.instructions ?? fallbackRole.instructions,
+  };
+}
+
+function sanitizeLoadout(loadout) {
+  const fallback = defaultLoadouts[0];
+  return {
+    ...loadout,
+    id: loadout?.id || makeId("loadout"),
+    name: String(loadout?.name || "Model Loadout").trim() || "Model Loadout",
+    roles: {
+      mind: sanitizeRole(loadout?.roles?.mind, defaultRoleConfig(fallback.roles.mind)),
+      author: sanitizeRole(
+        loadout?.roles?.author,
+        defaultRoleConfig(fallback.roles.author)
+      ),
+      continuity: sanitizeRole(
+        loadout?.roles?.continuity,
+        defaultRoleConfig(fallback.roles.continuity)
+      ),
+      stat: sanitizeRole(loadout?.roles?.stat, defaultRoleConfig(fallback.roles.stat)),
+      event: sanitizeRole(
+        loadout?.roles?.event,
+        defaultRoleConfig(fallback.roles.event)
+      ),
+      goal: sanitizeRole(loadout?.roles?.goal, defaultRoleConfig(fallback.roles.goal)),
+    },
+  };
+}
 
 function sendJson(response, statusCode, payload) {
   response.writeHead(statusCode, {
@@ -309,10 +353,10 @@ async function loadLoadouts() {
       .sort((a, b) => a.localeCompare(b))
       .map(async (fileName) => {
         const raw = await fs.readFile(path.join(LOADOUT_DIR, fileName), "utf8");
-        return {
+        return sanitizeLoadout({
           ...JSON.parse(raw),
           fileName,
-        };
+        });
       })
   );
   return loadouts;
@@ -325,9 +369,10 @@ async function loadLoadoutById(loadoutId) {
 
 async function saveLoadout(loadout, previousFileName) {
   await ensureDirectories();
-  const fileName = sanitizeFileName(loadout.name);
+  const sanitized = sanitizeLoadout(loadout);
+  const fileName = sanitizeFileName(sanitized.name);
   const payload = {
-    ...loadout,
+    ...sanitized,
     fileName,
   };
 
@@ -471,7 +516,6 @@ async function saveChatMessage(chatFileName, content) {
     `Example dialogue:`,
     character.dialogue || "No example dialogue provided.",
     `Author-role instructions: ${authorRole.instructions || ""}`,
-    `Default role instructions: ${authorRole.defaults || ""}`,
     `Stay in character, be conversational, and continue naturally from the conversation history.`,
   ].join("\n");
 
