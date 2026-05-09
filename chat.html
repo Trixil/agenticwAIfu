@@ -172,16 +172,36 @@
 
       <aside class="panel right-panel">
         <section class="panel-section config-group character-group">
-          <div class="section-heading">
-            <h2>Character</h2>
-            <p class="persona-name" id="selected-character-name">Character 1</p>
+          <div class="section-heading character-panel-heading">
+            <div>
+              <h2>Characters</h2>
+              <p class="persona-name" id="selected-character-name">Character 1</p>
+            </div>
+            <div class="character-add-switcher">
+              <button
+                class="manager-button character-add-button"
+                id="add-chat-character-button"
+                type="button"
+                aria-haspopup="listbox"
+                aria-expanded="false"
+              >
+                Add Character
+              </button>
+              <div class="character-switch-menu" id="chat-character-add-menu" hidden></div>
+            </div>
           </div>
+
+          <p class="character-group-note" id="chat-character-note">
+            The first attached character remains the active responder for now.
+          </p>
+
+          <div class="chat-character-list" id="chat-character-list"></div>
 
           <div class="character-preview">
             <img class="character-image" id="selected-character-image" src="assets/character-1.png" alt="Character 1 portrait">
           </div>
 
-          <button class="edit-button" type="button" data-open-editor="character-editor">Edit Character</button>
+          <button class="edit-button" id="edit-sidebar-character-button" type="button">Edit Selected Character</button>
         </section>
 
         <section class="panel-section config-group model-group">

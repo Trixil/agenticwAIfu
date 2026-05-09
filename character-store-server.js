@@ -88,6 +88,80 @@ function normalizeCharacter(character) {
   };
 }
 
+function getChatCharacterIds(chat) {
+  if (Array.isArray(chat?.characterIds)) {
+    const ids = chat.characterIds
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+    if (ids.length > 0) {
+      return [...new Set(ids)];
+    }
+  }
+
+  const fallbackId = String(chat?.characterId || "").trim();
+  return fallbackId ? [fallbackId] : [];
+}
+
+function normalizeChat(chat, characterMap = null) {
+  const characterIds = getChatCharacterIds(chat);
+  const primaryCharacterId = characterIds[0] || null;
+  const resolvedNames = characterIds
+    .map((characterId) => characterMap?.get(characterId)?.name)
+    .filter(Boolean);
+  const fallbackNames = Array.isArray(chat?.characterNames)
+    ? chat.characterNames.map((value) => String(value || "").trim()).filter(Boolean)
+    : [];
+  const characterNames = resolvedNames.length > 0 ? resolvedNames : fallbackNames;
+  const primaryCharacterName =
+    characterNames[0] || String(chat?.characterName || "").trim() || "Character";
+
+  return {
+    ...chat,
+    characterIds,
+    characterId: primaryCharacterId,
+    characterNames,
+    characterName: primaryCharacterName,
+    messages: Array.isArray(chat?.messages) ? chat.messages : [],
+  };
+}
+
+function formatCharacterCardSection(label, value, fallback) {
+  const content = String(value || "").trim() || fallback;
+  return `## ${label}\n${content}`;
+}
+
+function formatCharactersForPrompt(characters) {
+  const sections = characters.map((character) =>
+    [
+      `# ${character.name || "Character"}`,
+      formatCharacterCardSection(
+        "Nickname",
+        character.nickname || character.name,
+        "No nickname provided."
+      ),
+      formatCharacterCardSection(
+        "Description",
+        character.description,
+        "No description provided."
+      ),
+      formatCharacterCardSection(
+        "Scenario",
+        character.scenario,
+        "No scenario provided."
+      ),
+      formatCharacterCardSection(
+        "Example Dialogue",
+        character.dialogue,
+        "No example dialogue provided."
+      ),
+    ].join("\n\n")
+  );
+
+  return sections.length > 0
+    ? sections.join("\n\n")
+    : "# Character\n\n## Description\nNo character data provided.";
+}
+
 const defaultLoadouts = [
   {
     id: "loadout-1",
@@ -559,10 +633,10 @@ async function loadChats() {
       .sort((a, b) => a.localeCompare(b))
       .map(async (fileName) => {
         const raw = await fs.readFile(path.join(CHAT_DIR, fileName), "utf8");
-        return {
+        return normalizeChat({
           ...JSON.parse(raw),
           fileName,
-        };
+        });
       })
   );
 
@@ -571,18 +645,20 @@ async function loadChats() {
 
 async function loadChat(fileName) {
   const raw = await fs.readFile(path.join(CHAT_DIR, fileName), "utf8");
-  return {
+  return normalizeChat({
     ...JSON.parse(raw),
     fileName,
-  };
+  });
 }
 
 async function saveChat(chat) {
   await ensureDirectories();
+  const normalizedChat = normalizeChat(chat);
   const fileName =
-    chat.fileName || `${slugify(chat.title || chat.characterName || "chat")}-${chat.id}.json`;
+    normalizedChat.fileName ||
+    `${slugify(normalizedChat.title || normalizedChat.characterName || "chat")}-${normalizedChat.id}.json`;
   const payload = {
-    ...chat,
+    ...normalizedChat,
     fileName,
   };
   await fs.writeFile(
@@ -599,16 +675,19 @@ async function deleteChat(fileName) {
 }
 
 function summarizeChat(chat, characterMap) {
-  const character = characterMap.get(chat.characterId);
+  const normalizedChat = normalizeChat(chat, characterMap);
+  const character = characterMap.get(normalizedChat.characterId);
   return {
-    id: chat.id,
-    fileName: chat.fileName,
-    title: chat.title,
-    characterId: chat.characterId,
-    characterName: character?.name || chat.characterName || "Character",
-    updatedAt: chat.updatedAt,
-    createdAt: chat.createdAt,
-    messageCount: Array.isArray(chat.messages) ? chat.messages.length : 0,
+    id: normalizedChat.id,
+    fileName: normalizedChat.fileName,
+    title: normalizedChat.title,
+    characterId: normalizedChat.characterId,
+    characterIds: normalizedChat.characterIds,
+    characterName: character?.name || normalizedChat.characterName || "Character",
+    characterNames: normalizedChat.characterNames,
+    updatedAt: normalizedChat.updatedAt,
+    createdAt: normalizedChat.createdAt,
+    messageCount: normalizedChat.messages.length,
   };
 }
 
@@ -626,7 +705,9 @@ async function createChat(characterId, loadoutId) {
     id: makeId("chat"),
     title: `New Chat`,
     characterId: character.id,
+    characterIds: [character.id],
     characterName: character.name,
+    characterNames: [character.name],
     loadoutId: loadout?.id || null,
     loadoutName: loadout?.name || "Model Loadout 1",
     createdAt: now,
@@ -639,7 +720,11 @@ async function createChat(characterId, loadoutId) {
 
 async function saveChatMessage(chatFileName, content) {
   const chat = await loadChat(chatFileName);
-  const character = await loadCharacterById(chat.characterId);
+  const chatCharacterIds = getChatCharacterIds(chat);
+  const chatCharacters = (
+    await Promise.all(chatCharacterIds.map((characterId) => loadCharacterById(characterId)))
+  ).filter(Boolean);
+  const character = chatCharacters[0] || null;
   const loadout = chat.loadoutId ? await loadLoadoutById(chat.loadoutId) : null;
   if (!character) {
     throw new Error("Character not found for this chat.");
@@ -693,6 +778,7 @@ async function saveChatMessage(chatFileName, content) {
   const recentStatMessages = draftMessages.slice(-5);
   const nextTitle =
     chat.title === "New Chat" ? summarizeTitle(userMessage.content) : chat.title;
+  const characterRosterPrompt = formatCharactersForPrompt(chatCharacters);
 
   traceStep("user_message_added", null, {
     messageId: userMessage.id,
@@ -717,9 +803,9 @@ async function saveChatMessage(chatFileName, content) {
     `You are the Continuity LLM for a long-term interactive fiction story.`,
     `Character name: ${character.name}`,
     `Nickname in chat: ${character.nickname || character.name}`,
+    `Primary responding character: ${character.name}`,
+    `Chat characters:\n${characterRosterPrompt}`,
     `Current continuity notes: ${previousContinuityNotes || "None yet."}`,
-    `Character description: ${character.description || "No description provided."}`,
-    `Character scenario: ${character.scenario || "No scenario provided."}`,
     `You must examine only the earliest visible exchange provided below.`,
     `Continuity-role instructions: ${continuityRole.instructions || ""}`,
     `Write only the updated continuity notes.`,
@@ -741,8 +827,8 @@ async function saveChatMessage(chatFileName, content) {
     `You are the Event LLM for a long-term interactive fiction story.`,
     `Character name: ${character.name}`,
     `Nickname in chat: ${character.nickname || character.name}`,
-    `Character description: ${character.description || "No description provided."}`,
-    `Character scenario: ${character.scenario || "No scenario provided."}`,
+    `Primary responding character: ${character.name}`,
+    `Chat characters:\n${characterRosterPrompt}`,
     `Current event chain: ${previousEventChain || "None yet."}`,
     `Current scene context: ${sceneContext}`,
     `Event-role instructions: ${eventRole.instructions || ""}`,
@@ -763,8 +849,8 @@ async function saveChatMessage(chatFileName, content) {
     `You are the Mind LLM for a long-term interactive fiction character.`,
     `Character name: ${character.name}`,
     `Nickname in chat: ${character.nickname || character.name}`,
-    `Character description: ${character.description || "No description provided."}`,
-    `Character scenario: ${character.scenario || "No scenario provided."}`,
+    `Primary responding character: ${character.name}`,
+    `Chat characters:\n${characterRosterPrompt}`,
     `Previous Mental Synopsis: ${previousMentalSynopsis || "None yet."}`,
     `Current scene context: ${sceneContext}`,
     `Mind-role instructions: ${mindRole.instructions || ""}`,
@@ -788,8 +874,8 @@ async function saveChatMessage(chatFileName, content) {
     `You are the Mid-Term Goal LLM for a long-term interactive fiction character.`,
     `Character name: ${character.name}`,
     `Nickname in chat: ${character.nickname || character.name}`,
-    `Character description: ${character.description || "No description provided."}`,
-    `Character scenario: ${character.scenario || "No scenario provided."}`,
+    `Primary responding character: ${character.name}`,
+    `Chat characters:\n${characterRosterPrompt}`,
     `Previous mid-term goals: ${previousMidTermGoals || "None yet."}`,
     `Updated Mental Synopsis: ${mindOutput}`,
     `Latest user input: ${userMessage.content}`,
@@ -812,8 +898,8 @@ async function saveChatMessage(chatFileName, content) {
     `You are the Stat LLM for a long-term interactive fiction character.`,
     `Character name: ${character.name}`,
     `Nickname in chat: ${character.nickname || character.name}`,
-    `Character description: ${character.description || "No description provided."}`,
-    `Character scenario: ${character.scenario || "No scenario provided."}`,
+    `Primary responding character: ${character.name}`,
+    `Chat characters:\n${characterRosterPrompt}`,
     `Current relationship stats: ${previousRelationshipStats}`,
     `Updated Mental Synopsis: ${mindOutput}`,
     `Updated Mid-Term Goals: ${goalOutput}`,
@@ -842,8 +928,8 @@ async function saveChatMessage(chatFileName, content) {
     `Write only the next in-character assistant reply for ${character.nickname || character.name}.`,
     `Character name: ${character.name}`,
     `Nickname in chat: ${character.nickname || character.name}`,
-    `Character description: ${character.description || "No description provided."}`,
-    `Character scenario: ${character.scenario || "No scenario provided."}`,
+    `Primary responding character: ${character.name}`,
+    `Chat characters:\n${characterRosterPrompt}`,
     `Mental Synopsis: ${mindOutput}`,
     `Mid-Term Goals: ${goalOutput}`,
     `Continuity Notes: ${continuityOutput}`,

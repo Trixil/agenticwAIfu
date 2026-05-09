@@ -49,6 +49,11 @@ const characterDialogueInput = document.getElementById("editor-character-dialogu
 
 const selectedCharacterName = document.getElementById("selected-character-name");
 const selectedCharacterImage = document.getElementById("selected-character-image");
+const chatCharacterList = document.getElementById("chat-character-list");
+const chatCharacterNote = document.getElementById("chat-character-note");
+const addChatCharacterButton = document.getElementById("add-chat-character-button");
+const chatCharacterAddMenu = document.getElementById("chat-character-add-menu");
+const editSidebarCharacterButton = document.getElementById("edit-sidebar-character-button");
 
 const roleData = {
   mind: {
@@ -121,6 +126,7 @@ let loadoutDirectory = "";
 let activeRoleKey = "mind";
 let isSending = false;
 let isLoadoutMenuOpen = false;
+let isChatCharacterMenuOpen = false;
 
 function setStatus(message) {
   if (characterFileStatus) {
@@ -187,6 +193,43 @@ function normalizeCharacter(character) {
   };
 }
 
+function getChatCharacterIds(chat) {
+  if (Array.isArray(chat?.characterIds)) {
+    const ids = chat.characterIds
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+    if (ids.length > 0) {
+      return [...new Set(ids)];
+    }
+  }
+
+  const fallbackId = String(chat?.characterId || "").trim();
+  return fallbackId ? [fallbackId] : [];
+}
+
+function normalizeChatRecord(chat) {
+  const characterIds = getChatCharacterIds(chat);
+  const primaryCharacterId = characterIds[0] || null;
+  const resolvedNames = characterIds
+    .map((characterId) => getCharacterById(characterId)?.name)
+    .filter(Boolean);
+  const fallbackNames = Array.isArray(chat?.characterNames)
+    ? chat.characterNames.map((value) => String(value || "").trim()).filter(Boolean)
+    : [];
+  const characterNames = resolvedNames.length > 0 ? resolvedNames : fallbackNames;
+  const primaryCharacterName =
+    characterNames[0] || String(chat?.characterName || "").trim() || "Character";
+
+  return {
+    ...chat,
+    characterIds,
+    characterId: primaryCharacterId,
+    characterNames,
+    characterName: primaryCharacterName,
+    messages: Array.isArray(chat?.messages) ? chat.messages : [],
+  };
+}
+
 function getCharacterById(id) {
   return characters.find((character) => character.id === id) || null;
 }
@@ -209,6 +252,40 @@ function getCharacterDisplayName(character) {
 
 function getCharacterImage(character) {
   return character?.image?.trim() || DEFAULT_CHARACTER_IMAGE;
+}
+
+function getPrimaryActiveChatCharacter() {
+  return activeChat ? getCharacterById(activeChat.characterId) : null;
+}
+
+function getSidebarCharacter() {
+  if (pageType !== "chat") {
+    return getSelectedCharacter();
+  }
+
+  const activeIds = activeChat ? getChatCharacterIds(activeChat) : [];
+  if (selectedCharacterId && activeIds.includes(selectedCharacterId)) {
+    return getCharacterById(selectedCharacterId);
+  }
+
+  return getPrimaryActiveChatCharacter() || getSelectedCharacter();
+}
+
+function formatChatCharacterSubtitle(chat) {
+  const normalizedChat = normalizeChatRecord(chat);
+  const primaryCharacter = getCharacterById(normalizedChat.characterId);
+  const primaryLabel = getCharacterDisplayName(primaryCharacter);
+  const additionalCount = Math.max(0, normalizedChat.characterIds.length - 1);
+
+  if (!primaryCharacter && additionalCount === 0) {
+    return "No Character";
+  }
+
+  if (additionalCount === 0) {
+    return primaryLabel;
+  }
+
+  return `${primaryLabel} + ${additionalCount} more`;
 }
 
 function getSelectedLoadout() {
@@ -343,21 +420,42 @@ function normalizeLoadout(loadout) {
 }
 
 function syncCharacterUI() {
-  const character = getSelectedCharacter();
-  const displayName = getCharacterDisplayName(character);
-  const image = getCharacterImage(character);
+  const sidebarCharacter = getSidebarCharacter();
+  const displayName = getCharacterDisplayName(sidebarCharacter);
+  const image = getCharacterImage(sidebarCharacter);
 
   if (selectedCharacterName) {
-    selectedCharacterName.textContent = character?.name || "No Character";
+    const isLead =
+      pageType === "chat" &&
+      activeChat &&
+      sidebarCharacter &&
+      sidebarCharacter.id === activeChat.characterId;
+    selectedCharacterName.textContent = sidebarCharacter
+      ? `${sidebarCharacter.name}${isLead ? " (Lead)" : ""}`
+      : "No Character";
   }
   if (chatCharacterSubtitle) {
-    chatCharacterSubtitle.textContent = character ? displayName : "No Character";
+    chatCharacterSubtitle.textContent =
+      pageType === "chat" ? formatChatCharacterSubtitle(activeChat) : sidebarCharacter ? displayName : "No Character";
   }
   applyCharacterImage(
     selectedCharacterImage,
     image,
-    character ? `${character.name} portrait` : "Character portrait"
+    sidebarCharacter ? `${sidebarCharacter.name} portrait` : "Character portrait"
   );
+  if (chatCharacterNote) {
+    chatCharacterNote.textContent = activeChat
+      ? "The first attached character remains the active responder for now."
+      : "Open a chat to manage which saved characters are attached to it.";
+  }
+  if (addChatCharacterButton) {
+    addChatCharacterButton.disabled = pageType === "chat" && !activeChat;
+  }
+  if (pageType === "chat" && !activeChat) {
+    setChatCharacterMenuOpen(false);
+  }
+  renderChatCharacterList();
+  renderChatCharacterAddMenu();
 }
 
 function syncLoadoutUI() {
@@ -425,6 +523,248 @@ function renderLoadoutSwitchMenu() {
     });
     loadoutSwitchMenu.appendChild(option);
   });
+}
+
+function setChatCharacterMenuOpen(isOpen) {
+  if (!addChatCharacterButton || !chatCharacterAddMenu) {
+    return;
+  }
+
+  isChatCharacterMenuOpen = isOpen;
+  addChatCharacterButton.setAttribute("aria-expanded", String(isOpen));
+  chatCharacterAddMenu.hidden = !isOpen;
+}
+
+function renderChatCharacterAddMenu() {
+  if (!chatCharacterAddMenu) {
+    return;
+  }
+
+  chatCharacterAddMenu.innerHTML = "";
+
+  if (!activeChat) {
+    const empty = document.createElement("div");
+    empty.className = "character-switch-empty";
+    empty.textContent = "Open a chat first, then you can attach extra characters here.";
+    chatCharacterAddMenu.appendChild(empty);
+    return;
+  }
+
+  const activeIds = new Set(getChatCharacterIds(activeChat));
+  const availableCharacters = characters.filter((character) => !activeIds.has(character.id));
+
+  if (availableCharacters.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "character-switch-empty";
+    empty.textContent = "All saved characters are already attached to this chat.";
+    chatCharacterAddMenu.appendChild(empty);
+    return;
+  }
+
+  availableCharacters.forEach((character) => {
+    const option = document.createElement("button");
+    option.type = "button";
+    option.className = "character-switch-option";
+
+    const image = document.createElement("img");
+    image.className = "character-switch-option-image";
+    applyCharacterImage(image, getCharacterImage(character), `${character.name} portrait`);
+
+    const text = document.createElement("span");
+    text.className = "character-switch-option-text";
+
+    const name = document.createElement("span");
+    name.className = "character-switch-option-name";
+    name.textContent = character.name;
+
+    const meta = document.createElement("span");
+    meta.className = "character-switch-option-meta";
+    meta.textContent = getCharacterDisplayName(character);
+
+    text.append(name, meta);
+    option.append(image, text);
+    option.addEventListener("click", () => {
+      addCharacterToActiveChat(character.id).catch((error) => {
+        setStatus(error.message || "Failed to add character to chat.");
+      });
+    });
+
+    chatCharacterAddMenu.appendChild(option);
+  });
+}
+
+function renderChatCharacterList() {
+  if (!chatCharacterList) {
+    return;
+  }
+
+  chatCharacterList.innerHTML = "";
+
+  if (!activeChat) {
+    const empty = document.createElement("div");
+    empty.className = "chat-character-empty";
+    empty.textContent = "Create or open a chat to manage its character roster.";
+    chatCharacterList.appendChild(empty);
+    return;
+  }
+
+  const activeIds = getChatCharacterIds(activeChat);
+  if (activeIds.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "chat-character-empty";
+    empty.textContent = "This chat has no attached characters yet.";
+    chatCharacterList.appendChild(empty);
+    return;
+  }
+
+  activeIds.forEach((characterId, index) => {
+    const character = getCharacterById(characterId);
+    if (!character) {
+      return;
+    }
+
+    const card = document.createElement("div");
+    card.className = "chat-character-card";
+    if (selectedCharacterId === character.id) {
+      card.classList.add("is-selected");
+    }
+    if (character.id === activeChat.characterId) {
+      card.classList.add("is-lead");
+    }
+
+    const portrait = document.createElement("img");
+    portrait.className = "chat-character-portrait";
+    applyCharacterImage(portrait, getCharacterImage(character), `${character.name} portrait`);
+    portrait.addEventListener("click", () => {
+      selectedCharacterId = character.id;
+      editingCharacterId = character.id;
+      syncCharacterUI();
+    });
+
+    const body = document.createElement("div");
+    body.className = "chat-character-body";
+
+    const meta = document.createElement("div");
+    meta.className = "chat-character-meta";
+
+    const nameButton = document.createElement("button");
+    nameButton.type = "button";
+    nameButton.className = "chat-character-name-button";
+    nameButton.textContent = character.name;
+    nameButton.addEventListener("click", () => {
+      selectedCharacterId = character.id;
+      editingCharacterId = character.id;
+      syncCharacterUI();
+    });
+
+    meta.appendChild(nameButton);
+
+    if (index === 0) {
+      const badge = document.createElement("span");
+      badge.className = "chat-character-badge";
+      badge.textContent = "Lead Reply";
+      meta.appendChild(badge);
+    }
+
+    const submeta = document.createElement("p");
+    submeta.className = "chat-character-submeta";
+    submeta.textContent =
+      index === 0
+        ? "This character is currently the visible responder for the chat."
+        : "This character's card data is included in the hidden chat roster prompt.";
+
+    const actions = document.createElement("div");
+    actions.className = "chat-character-actions";
+
+    const editButton = document.createElement("button");
+    editButton.type = "button";
+    editButton.className = "chat-character-action";
+    editButton.textContent = "Edit";
+    editButton.addEventListener("click", () => {
+      selectedCharacterId = character.id;
+      editingCharacterId = character.id;
+      openEditor("character-editor");
+    });
+    actions.appendChild(editButton);
+
+    if (index > 0) {
+      const removeButton = document.createElement("button");
+      removeButton.type = "button";
+      removeButton.className = "chat-character-action chat-character-action-danger";
+      removeButton.textContent = "Remove";
+      removeButton.addEventListener("click", () => {
+        removeCharacterFromActiveChat(character.id).catch((error) => {
+          setStatus(error.message || "Failed to remove character from chat.");
+        });
+      });
+      actions.appendChild(removeButton);
+    }
+
+    body.append(meta, submeta, actions);
+    card.append(portrait, body);
+    chatCharacterList.appendChild(card);
+  });
+}
+
+async function saveActiveChatCharacterRoster() {
+  if (!activeChat) {
+    return;
+  }
+
+  const characterIds = getChatCharacterIds(activeChat);
+  const characterNames = characterIds
+    .map((characterId) => getCharacterById(characterId)?.name)
+    .filter(Boolean);
+
+  activeChat.characterIds = characterIds;
+  activeChat.characterId = characterIds[0] || null;
+  activeChat.characterNames = characterNames;
+  activeChat.characterName = characterNames[0] || "Character";
+
+  await saveActiveChatEdits();
+  syncCharacterUI();
+  renderActiveChat();
+}
+
+async function addCharacterToActiveChat(characterId) {
+  if (!activeChat) {
+    throw new Error("Open a chat before adding characters.");
+  }
+
+  const character = getCharacterById(characterId);
+  if (!character) {
+    throw new Error("Character not found.");
+  }
+
+  const currentIds = getChatCharacterIds(activeChat);
+  if (currentIds.includes(characterId)) {
+    setChatCharacterMenuOpen(false);
+    return;
+  }
+
+  activeChat.characterIds = [...currentIds, characterId];
+  selectedCharacterId = characterId;
+  editingCharacterId = characterId;
+  setChatCharacterMenuOpen(false);
+  await saveActiveChatCharacterRoster();
+}
+
+async function removeCharacterFromActiveChat(characterId) {
+  if (!activeChat) {
+    return;
+  }
+
+  const currentIds = getChatCharacterIds(activeChat);
+  if (currentIds[0] === characterId) {
+    throw new Error("The lead character cannot be removed from the chat yet.");
+  }
+
+  activeChat.characterIds = currentIds.filter((id) => id !== characterId);
+  if (selectedCharacterId === characterId) {
+    selectedCharacterId = activeChat.characterIds[0] || null;
+    editingCharacterId = selectedCharacterId;
+  }
+  await saveActiveChatCharacterRoster();
 }
 
 function fillLoadoutForm(loadout) {
@@ -537,31 +877,32 @@ function renderChatList() {
   chatList.appendChild(newChatButton);
 
   chats.forEach((chat) => {
+    const normalizedChat = normalizeChatRecord(chat);
     const button = document.createElement("button");
     button.type = "button";
     button.className = "list-card chat-card";
-    if (activeChat && chat.fileName === activeChat.fileName) {
+    if (activeChat && normalizedChat.fileName === activeChat.fileName) {
       button.classList.add("is-active");
     }
 
     const meta = document.createElement("span");
     meta.className = "meta-line";
-    meta.textContent = formatChatMeta(chat);
+    meta.textContent = formatChatMeta(normalizedChat);
 
     const title = document.createElement("strong");
-    title.textContent = chat.title;
+    title.textContent = normalizedChat.title;
 
     const persona = document.createElement("span");
     persona.className = "chat-persona";
-    persona.textContent = chat.characterName || "Character";
+    persona.textContent = normalizedChat.characterName || "Character";
 
     button.append(meta, title, persona);
     button.addEventListener("click", () => {
       if (pageType === "home") {
-        window.location.href = `chat.html?chat=${encodeURIComponent(chat.fileName)}`;
+        window.location.href = `chat.html?chat=${encodeURIComponent(normalizedChat.fileName)}`;
         return;
       }
-      loadActiveChat(chat.fileName);
+      loadActiveChat(normalizedChat.fileName);
     });
 
     chatList.appendChild(button);
@@ -652,7 +993,7 @@ function renderActiveChat() {
 
   chatTitle.textContent = activeChat.title || "New Chat";
   const character = getCharacterById(activeChat.characterId);
-  chatCharacterSubtitle.textContent = getCharacterDisplayName(character);
+  chatCharacterSubtitle.textContent = formatChatCharacterSubtitle(activeChat);
 
   if (!activeChat.messages.length) {
     const empty = document.createElement("div");
@@ -686,17 +1027,20 @@ function autosizeComposer() {
 }
 
 function updateChatSummary(fullChat) {
+  const normalizedChat = normalizeChatRecord(fullChat);
   const existing = chats.findIndex((chat) => chat.fileName === fullChat.fileName);
-  const character = getCharacterById(fullChat.characterId);
+  const character = getCharacterById(normalizedChat.characterId);
   const summary = {
-    id: fullChat.id,
-    fileName: fullChat.fileName,
-    title: fullChat.title,
-    characterId: fullChat.characterId,
-    characterName: character?.name || fullChat.characterName || "Character",
-    updatedAt: fullChat.updatedAt,
-    createdAt: fullChat.createdAt,
-    messageCount: Array.isArray(fullChat.messages) ? fullChat.messages.length : 0,
+    id: normalizedChat.id,
+    fileName: normalizedChat.fileName,
+    title: normalizedChat.title,
+    characterId: normalizedChat.characterId,
+    characterIds: normalizedChat.characterIds,
+    characterName: character?.name || normalizedChat.characterName || "Character",
+    characterNames: normalizedChat.characterNames,
+    updatedAt: normalizedChat.updatedAt,
+    createdAt: normalizedChat.createdAt,
+    messageCount: normalizedChat.messages.length,
   };
 
   if (existing >= 0) {
@@ -719,7 +1063,7 @@ async function attachSelectedLoadoutToActiveChat() {
     body: JSON.stringify({ chat: activeChat }),
   });
 
-  activeChat = payload.chat;
+  activeChat = normalizeChatRecord(payload.chat);
   updateChatSummary(activeChat);
   renderChatList();
 }
@@ -728,6 +1072,10 @@ async function loadCharactersFromPc() {
   const payload = await apiRequest("/characters");
   characters = (payload.characters || []).map((character) => normalizeCharacter(character));
   characterDirectory = payload.directory || "";
+  chats = chats.map((chat) => normalizeChatRecord(chat));
+  if (activeChat) {
+    activeChat = normalizeChatRecord(activeChat);
+  }
 
   if (!selectedCharacterId && characters.length > 0) {
     selectedCharacterId = characters[0].id;
@@ -758,15 +1106,19 @@ async function loadLoadoutsFromPc() {
 
 async function loadChatsFromPc() {
   const payload = await apiRequest("/chats");
-  chats = payload.chats || [];
+  chats = (payload.chats || []).map((chat) => normalizeChatRecord(chat));
   chatDirectory = payload.directory || "";
   renderChatList();
 }
 
 async function loadActiveChat(fileName) {
   const payload = await apiRequest(`/chats/${encodeURIComponent(fileName)}`);
-  activeChat = payload.chat;
-  selectedCharacterId = activeChat.characterId;
+  activeChat = normalizeChatRecord(payload.chat);
+  const activeIds = getChatCharacterIds(activeChat);
+  selectedCharacterId =
+    selectedCharacterId && activeIds.includes(selectedCharacterId)
+      ? selectedCharacterId
+      : activeChat.characterId;
   editingCharacterId = selectedCharacterId;
   selectedLoadoutId = activeChat.loadoutId || selectedLoadoutId;
   editingLoadoutId = selectedLoadoutId;
@@ -923,9 +1275,14 @@ async function saveCurrentCharacterToPc() {
   selectedCharacterId = savedCharacter.id;
   editingCharacterId = savedCharacter.id;
   characterDirectory = payload.directory || characterDirectory;
+  chats = chats.map((chat) => normalizeChatRecord(chat));
+  if (activeChat) {
+    activeChat = normalizeChatRecord(activeChat);
+  }
   syncCharacterUI();
   renderCharacterTileGrid();
   renderChatList();
+  renderActiveChat();
   fillCharacterForm(savedCharacter);
   setStatus(
     characterDirectory
@@ -938,6 +1295,10 @@ async function deleteCurrentCharacter() {
   const character = getEditingCharacter();
   if (!character) {
     return;
+  }
+
+  if (activeChat && getChatCharacterIds(activeChat).includes(character.id)) {
+    throw new Error("This character is attached to the open chat. Remove it from the chat first.");
   }
 
   const confirmed = window.confirm(`Delete ${character.name}?`);
@@ -994,7 +1355,7 @@ async function saveActiveChatEdits() {
     method: "POST",
     body: JSON.stringify({ chat: activeChat }),
   });
-  activeChat = payload.chat;
+  activeChat = normalizeChatRecord(payload.chat);
   updateChatSummary(activeChat);
   renderChatList();
 }
@@ -1091,8 +1452,12 @@ async function sendCurrentMessage() {
       }),
     });
 
-    activeChat = payload.chat;
-    selectedCharacterId = activeChat.characterId;
+    activeChat = normalizeChatRecord(payload.chat);
+    const activeIds = getChatCharacterIds(activeChat);
+    selectedCharacterId =
+      selectedCharacterId && activeIds.includes(selectedCharacterId)
+        ? selectedCharacterId
+        : activeChat.characterId;
     editingCharacterId = selectedCharacterId;
     composerInput.value = "";
     autosizeComposer();
@@ -1196,6 +1561,7 @@ async function initializeChat() {
     renderActiveChat();
   }
 
+  syncCharacterUI();
   syncLoadoutUI();
   if (loadoutDirectory) {
     setLoadoutStatus(`Model loadouts loaded from ${loadoutDirectory}`);
@@ -1212,6 +1578,23 @@ document.querySelectorAll("[data-close-editor]").forEach((button) => {
   button.addEventListener("click", () => {
     closeEditors();
   });
+});
+
+addChatCharacterButton?.addEventListener("click", () => {
+  renderChatCharacterAddMenu();
+  setChatCharacterMenuOpen(!isChatCharacterMenuOpen);
+});
+
+editSidebarCharacterButton?.addEventListener("click", () => {
+  const character = getSidebarCharacter();
+  if (!character) {
+    setStatus("Select a character first.");
+    return;
+  }
+
+  selectedCharacterId = character.id;
+  editingCharacterId = character.id;
+  openEditor("character-editor");
 });
 
 selectedLoadoutButton?.addEventListener("click", () => {
@@ -1318,23 +1701,40 @@ sendMessageButton?.addEventListener("click", () => {
 });
 
 document.addEventListener("click", (event) => {
-  if (!isLoadoutMenuOpen || !selectedLoadoutButton || !loadoutSwitchMenu) {
+  const target = event.target;
+  if (!(target instanceof Node)) {
     return;
   }
 
-  const target = event.target;
   if (
-    target instanceof Node &&
+    isLoadoutMenuOpen &&
+    selectedLoadoutButton &&
+    loadoutSwitchMenu &&
     !selectedLoadoutButton.contains(target) &&
     !loadoutSwitchMenu.contains(target)
   ) {
     setLoadoutMenuOpen(false);
   }
+
+  if (
+    isChatCharacterMenuOpen &&
+    addChatCharacterButton &&
+    chatCharacterAddMenu &&
+    !addChatCharacterButton.contains(target) &&
+    !chatCharacterAddMenu.contains(target)
+  ) {
+    setChatCharacterMenuOpen(false);
+  }
 });
 
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && isLoadoutMenuOpen) {
-    setLoadoutMenuOpen(false);
+  if (event.key === "Escape") {
+    if (isLoadoutMenuOpen) {
+      setLoadoutMenuOpen(false);
+    }
+    if (isChatCharacterMenuOpen) {
+      setChatCharacterMenuOpen(false);
+    }
   }
 });
 
