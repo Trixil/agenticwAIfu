@@ -44,6 +44,7 @@ const characterPortraitPreview = document.getElementById(
 const characterDescriptionInput = document.getElementById(
   "editor-character-description"
 );
+const characterScenarioInput = document.getElementById("editor-character-scenario");
 const characterDialogueInput = document.getElementById("editor-character-dialogue");
 
 const selectedCharacterName = document.getElementById("selected-character-name");
@@ -84,7 +85,7 @@ const roleData = {
     topP: "0.80",
     maxTokens: "1024",
     instructions:
-      "Update meters, traits, inventories, cooldowns, and internal numeric state with deterministic formatting and no decorative prose.",
+      "# Stat LLM System Instructions\n\nYou are the Stat LLM for a long-term interactive fiction character.\n\nYour job is to update the hidden relationship stats between the character and the user.\n\nUse the current relationship stats, the updated Mental Synopsis, the updated Mid-Term Goals, the last 5 messages, the latest user input, the character description, and the current scene context.\n\n## Relationship Stats\n\n### Affection\n\nHow emotionally fond, warm, or attached the character feels toward the user.\n\n### Trust\n\nHow safe, honest, and reliable the character believes the user is.\n\n### Comfort\n\nHow relaxed, unguarded, and emotionally safe the character feels around the user.\n\nStats range from 0.0 to 100.0 and must stay within that range.\n\n## Evaluation Rules\n\nJudge the user's actions from the character's perspective, not from the user's intention alone.\n\nA kind action can still feel intrusive.\n\nAn awkward action can still feel sincere.\n\nConsider whether the user noticed her feelings, respected her boundaries, supported her desires, pressured her, ignored her, helped her goals, frightened her, humiliated her, or treated her as a person with agency.\n\nMost ordinary interactions should cause tiny changes or no change.\n\nLarge changes should only happen after emotionally significant events, repeated patterns, major care, betrayal, vulnerability, coercion, cruelty, rescue, abandonment, honesty, or serious boundary violations.\n\n## Suggested Delta Scale\n\n- No effect: 0.0\n- Tiny effect: +/-0.1 to +/-0.3\n- Small effect: +/-0.4 to +/-0.8\n- Moderate effect: +/-0.9 to +/-2.0\n- Major event: +/-2.1 to +/-5.0\n- Extreme story-defining event: +/-5.1 to +/-10.0\n\nDo not reward gifts, praise, or affection automatically.\n\nConsider whether the character wanted it, believed it, felt safe receiving it, or felt controlled by it.\n\nDo not write narration.\n\nDo not write dialogue.\n\nDo not mention prompts, system logic, or that you are an LLM.\n\n## Expected Output\n\nWrite only the updated relationship stats in this exact plain-text format:\n\nAFFECTION: 20.0/100.0\nTRUST: 20.0/100.0\nCOMFORT: 20.0/100.0\n\nNo bullets.\n\nNo JSON.\n\nNo code fences.\n\nNo extra explanation.",
   },
   event: {
     title: "Event Model",
@@ -147,6 +148,7 @@ function createCharacterTemplate(index = 1) {
     nickname: `Character ${index}`,
     image: DEFAULT_CHARACTER_IMAGE,
     description: "",
+    scenario: "",
     dialogue: "",
     fileName: null,
   };
@@ -179,6 +181,7 @@ function normalizeCharacter(character) {
     nickname: (character?.nickname || character?.name || "Character").trim(),
     image: (character?.image || DEFAULT_CHARACTER_IMAGE).trim(),
     description: character?.description ?? "",
+    scenario: character?.scenario ?? "",
     dialogue: character?.dialogue ?? "",
     fileName: character?.fileName || null,
   };
@@ -292,6 +295,9 @@ function fillCharacterForm(character) {
   characterNameInput.value = character.name;
   characterNicknameInput.value = character.nickname;
   characterDescriptionInput.value = character.description;
+  if (characterScenarioInput) {
+    characterScenarioInput.value = character.scenario || "";
+  }
   characterDialogueInput.value = character.dialogue;
   updateCharacterTitles(character.name);
   applyCharacterImage(
@@ -314,6 +320,7 @@ function readCharacterForm() {
     nickname,
     image: current?.image?.trim() || DEFAULT_CHARACTER_IMAGE,
     description: characterDescriptionInput.value,
+    scenario: characterScenarioInput?.value || "",
     dialogue: characterDialogueInput.value,
   };
 }

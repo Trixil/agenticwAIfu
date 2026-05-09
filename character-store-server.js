@@ -50,6 +50,8 @@ const defaultCharacters = [
     image: "assets/character-1.png",
     description:
       "A poised host with a theatrical edge, tailored diction, and a tendency to turn ordinary requests into intimate little ceremonies.",
+    scenario:
+      "A private late-night room where memory, scent, and suggestion blur together into something intimate and uncertain.",
     dialogue:
       `"Welcome back. The room is prepared, and the city is glittering just for us tonight."\n\n"Tell me what mood you want, and I will make the scene behave accordingly."\n\n"If we are going to do this properly, you should start with a line worth remembering."`,
   },
@@ -60,6 +62,8 @@ const defaultCharacters = [
     image: "assets/character-1.png",
     description:
       "A meticulous tactician who speaks in sharp, elegant sentences and treats every conversation like a strategy session.",
+    scenario:
+      "A tense planning session where every detail matters and every answer may change the route forward.",
     dialogue:
       `"If we move carefully, we can turn this entire situation to our advantage."\n\n"Tell me what matters most, and I will build the plan around it."`,
   },
@@ -70,10 +74,19 @@ const defaultCharacters = [
     image: "assets/character-1.png",
     description:
       "A quiet archivist persona who remembers every detail and responds with patient, deliberate clarity.",
+    scenario:
+      "A dim archive of records and fragile truths where the past feels close enough to touch.",
     dialogue:
       `"I wrote it down the first time you said it. Nothing important leaves the record."\n\n"If you want the whole story, we should begin at the beginning."`,
   },
 ];
+
+function normalizeCharacter(character) {
+  return {
+    ...character,
+    scenario: character?.scenario || "",
+  };
+}
 
 const defaultLoadouts = [
   {
@@ -110,7 +123,7 @@ const defaultLoadouts = [
         topP: "0.80",
         maxTokens: "1024",
         instructions:
-          "Update meters, traits, inventories, cooldowns, and internal numeric state with deterministic formatting and no decorative prose.",
+          "# Stat LLM System Instructions\n\nYou are the Stat LLM for a long-term interactive fiction character.\n\nYour job is to update the hidden relationship stats between the character and the user.\n\nUse the current relationship stats, the updated Mental Synopsis, the updated Mid-Term Goals, the last 5 messages, the latest user input, the character description, and the current scene context.\n\n## Relationship Stats\n\n### Affection\n\nHow emotionally fond, warm, or attached the character feels toward the user.\n\n### Trust\n\nHow safe, honest, and reliable the character believes the user is.\n\n### Comfort\n\nHow relaxed, unguarded, and emotionally safe the character feels around the user.\n\nStats range from 0.0 to 100.0 and must stay within that range.\n\n## Evaluation Rules\n\nJudge the user's actions from the character's perspective, not from the user's intention alone.\n\nA kind action can still feel intrusive.\n\nAn awkward action can still feel sincere.\n\nConsider whether the user noticed her feelings, respected her boundaries, supported her desires, pressured her, ignored her, helped her goals, frightened her, humiliated her, or treated her as a person with agency.\n\nMost ordinary interactions should cause tiny changes or no change.\n\nLarge changes should only happen after emotionally significant events, repeated patterns, major care, betrayal, vulnerability, coercion, cruelty, rescue, abandonment, honesty, or serious boundary violations.\n\n## Suggested Delta Scale\n\n- No effect: 0.0\n- Tiny effect: +/-0.1 to +/-0.3\n- Small effect: +/-0.4 to +/-0.8\n- Moderate effect: +/-0.9 to +/-2.0\n- Major event: +/-2.1 to +/-5.0\n- Extreme story-defining event: +/-5.1 to +/-10.0\n\nDo not reward gifts, praise, or affection automatically.\n\nConsider whether the character wanted it, believed it, felt safe receiving it, or felt controlled by it.\n\nDo not write narration.\n\nDo not write dialogue.\n\nDo not mention prompts, system logic, or that you are an LLM.\n\n## Expected Output\n\nWrite only the updated relationship stats in this exact plain-text format:\n\nAFFECTION: 20.0/100.0\nTRUST: 20.0/100.0\nCOMFORT: 20.0/100.0\n\nNo bullets.\n\nNo JSON.\n\nNo code fences.\n\nNo extra explanation.",
       },
       event: {
         llm: "gpt-oss-sim",
@@ -241,6 +254,148 @@ function extractAssistantText(messageContent) {
   return "";
 }
 
+function buildRoleRequestMessages(systemPrompt, conversationMessages) {
+  return [
+    { role: "system", content: systemPrompt },
+    ...conversationMessages.map((message) => ({
+      role: message.role,
+      content: message.content,
+    })),
+  ];
+}
+
+async function requestRoleCompletion(roleConfig, systemPrompt, conversationMessages) {
+  const openRouterResponse = await fetch(
+    "https://openrouter.ai/api/v1/chat/completions",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: roleConfig.llm,
+        temperature: Number(roleConfig.temperature || 1),
+        top_p: Number(roleConfig.topP || 1),
+        max_tokens: Number(roleConfig.maxTokens || 1024),
+        messages: buildRoleRequestMessages(systemPrompt, conversationMessages),
+      }),
+    }
+  );
+
+  if (!openRouterResponse.ok) {
+    const errorPayload = await openRouterResponse.text();
+    throw new Error(
+      `OpenRouter request failed (${openRouterResponse.status}): ${errorPayload}`
+    );
+  }
+
+  const completion = await openRouterResponse.json();
+  const text = extractAssistantText(completion?.choices?.[0]?.message?.content);
+  if (!text) {
+    throw new Error("OpenRouter returned an empty response.");
+  }
+
+  return text;
+}
+
+function countParagraphs(text) {
+  return String(text || "")
+    .trim()
+    .split(/\n\s*\n/)
+    .filter(Boolean).length;
+}
+
+function needsMindRewrite(text) {
+  const normalized = String(text || "").trim();
+  if (!normalized) {
+    return true;
+  }
+
+  if (countParagraphs(normalized) > 1) {
+    return true;
+  }
+
+  if (/[\"“”]/.test(normalized)) {
+    return true;
+  }
+
+  if (
+    /\b(says|said|asks|asked|replies|replied|murmurs|whispers|laughs|smiles|grins)\b/i.test(
+      normalized
+    )
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+async function normalizeMindOutput(roleConfig, character, rawOutput) {
+  if (!needsMindRewrite(rawOutput)) {
+    return String(rawOutput || "").trim();
+  }
+
+  const repairPrompt = [
+    `You are repairing a hidden Mental Synopsis for an interactive fiction character.`,
+    `Character name: ${character.name}`,
+    `Nickname in chat: ${character.nickname || character.name}`,
+    `Rewrite the candidate so it becomes a true Mental Synopsis.`,
+    `The output must describe only inner emotional state, private reaction, and immediate short-term desire.`,
+    `Write exactly one paragraph in third-person present tense.`,
+    `Maximum 5 sentences.`,
+    `Do not include dialogue, quoted speech, scene narration, action beats, or visible description.`,
+    `Return only the repaired Mental Synopsis.`,
+  ].join("\n");
+
+  return requestRoleCompletion(
+    {
+      ...roleConfig,
+      temperature: 0.2,
+      maxTokens: 300,
+    },
+    repairPrompt,
+    [{ role: "user", content: String(rawOutput || "") }]
+  );
+}
+
+function extractStatValue(rawText, statName, fallbackValue) {
+  const text = String(rawText || "");
+  const directMatch = text.match(
+    new RegExp(`${statName}\\s*:\\s*([0-9]+(?:\\.[0-9]+)?)`, "i")
+  );
+  if (directMatch) {
+    return Number(directMatch[1]);
+  }
+
+  const jsonLikeMatch = text.match(
+    new RegExp(`"${statName.toLowerCase()}"\\s*:\\s*([0-9]+(?:\\.[0-9]+)?)`, "i")
+  );
+  if (jsonLikeMatch) {
+    return Number(jsonLikeMatch[1]);
+  }
+
+  return fallbackValue;
+}
+
+function normalizeRelationshipStatsOutput(rawOutput, previousStatsText) {
+  const fallbackAffection = extractStatValue(previousStatsText, "AFFECTION", 20.0);
+  const fallbackTrust = extractStatValue(previousStatsText, "TRUST", 20.0);
+  const fallbackComfort = extractStatValue(previousStatsText, "COMFORT", 20.0);
+
+  const affection = extractStatValue(rawOutput, "AFFECTION", fallbackAffection);
+  const trust = extractStatValue(rawOutput, "TRUST", fallbackTrust);
+  const comfort = extractStatValue(rawOutput, "COMFORT", fallbackComfort);
+
+  const clamp = (value) => Math.min(100, Math.max(0, Number(value || 0)));
+
+  return [
+    `AFFECTION: ${clamp(affection).toFixed(1)}/100.0`,
+    `TRUST: ${clamp(trust).toFixed(1)}/100.0`,
+    `COMFORT: ${clamp(comfort).toFixed(1)}/100.0`,
+  ].join("\n");
+}
+
 async function readRequestBody(request) {
   const chunks = [];
   for await (const chunk of request) {
@@ -304,10 +459,10 @@ async function loadCharacters() {
       .sort((a, b) => a.localeCompare(b))
       .map(async (fileName) => {
         const raw = await fs.readFile(path.join(CHARACTER_DIR, fileName), "utf8");
-        return {
+        return normalizeCharacter({
           ...JSON.parse(raw),
           fileName,
-        };
+        });
       })
   );
   return characters;
@@ -320,9 +475,10 @@ async function loadCharacterById(characterId) {
 
 async function saveCharacter(character, previousFileName) {
   await ensureDirectories();
-  const fileName = sanitizeFileName(character.name);
+  const normalized = normalizeCharacter(character);
+  const fileName = sanitizeFileName(normalized.name);
   const payload = {
-    ...character,
+    ...normalized,
     fileName,
   };
 
@@ -504,8 +660,182 @@ async function saveChatMessage(chatFileName, content) {
   }
 
   const draftMessages = [...(chat.messages || []), userMessage];
+  const pipelineTrace = [];
+  const traceStep = (step, model, extra = {}) => {
+    pipelineTrace.push({
+      step,
+      model: model || null,
+      at: new Date().toISOString(),
+      ...extra,
+    });
+  };
 
+  const continuityRole =
+    loadout?.roles?.continuity || defaultLoadouts[0].roles.continuity;
+  const eventRole = loadout?.roles?.event || defaultLoadouts[0].roles.event;
+  const mindRole = loadout?.roles?.mind || defaultLoadouts[0].roles.mind;
+  const goalRole = loadout?.roles?.goal || defaultLoadouts[0].roles.goal;
+  const statRole = loadout?.roles?.stat || defaultLoadouts[0].roles.stat;
   const authorRole = loadout?.roles?.author || defaultLoadouts[0].roles.author;
+  const previousContinuityNotes = chat.hiddenState?.continuityNotes?.content || "";
+  const previousEventChain = chat.hiddenState?.eventChain?.content || "";
+  const previousMentalSynopsis = chat.hiddenState?.mentalSynopsis?.content || "";
+  const previousMidTermGoals = chat.hiddenState?.midTermGoals?.content || "";
+  const previousRelationshipStats =
+    chat.hiddenState?.relationshipStats?.content ||
+    "AFFECTION: 20.0/100.0\nTRUST: 20.0/100.0\nCOMFORT: 20.0/100.0";
+  const sceneContext = chat.hiddenState?.sceneContext?.content || "No scene context is available yet.";
+  const recentVisibleMessages = draftMessages;
+  const earliestVisibleExchange = draftMessages.slice(0, Math.min(2, draftMessages.length));
+  const recentEventMessages = draftMessages;
+  const recentMindMessages = draftMessages.slice(-20);
+  const recentGoalMessages = draftMessages.slice(-5);
+  const recentStatMessages = draftMessages.slice(-5);
+  const nextTitle =
+    chat.title === "New Chat" ? summarizeTitle(userMessage.content) : chat.title;
+
+  traceStep("user_message_added", null, {
+    messageId: userMessage.id,
+    visibleMessageCount: draftMessages.length,
+  });
+
+  await saveChat({
+    ...chat,
+    title: nextTitle,
+    characterName: character.name,
+    updatedAt: new Date().toISOString(),
+    hiddenState: {
+      ...(chat.hiddenState || {}),
+      pipelineTrace: {
+        lastRun: [...pipelineTrace],
+      },
+    },
+    messages: draftMessages,
+  });
+
+  const continuitySystemPrompt = [
+    `You are the Continuity LLM for a long-term interactive fiction story.`,
+    `Character name: ${character.name}`,
+    `Nickname in chat: ${character.nickname || character.name}`,
+    `Current continuity notes: ${previousContinuityNotes || "None yet."}`,
+    `Character description: ${character.description || "No description provided."}`,
+    `Character scenario: ${character.scenario || "No scenario provided."}`,
+    `You must examine only the earliest visible exchange provided below.`,
+    `Continuity-role instructions: ${continuityRole.instructions || ""}`,
+    `Write only the updated continuity notes.`,
+  ].join("\n");
+
+  const continuityOutput = await requestRoleCompletion(
+    continuityRole,
+    continuitySystemPrompt,
+    earliestVisibleExchange.length > 0
+      ? earliestVisibleExchange
+      : [{ role: "user", content: "" }]
+  );
+
+  traceStep("continuity_completed", continuityRole.llm || null, {
+    inputMessages: earliestVisibleExchange.length || 1,
+  });
+
+  const eventSystemPrompt = [
+    `You are the Event LLM for a long-term interactive fiction story.`,
+    `Character name: ${character.name}`,
+    `Nickname in chat: ${character.nickname || character.name}`,
+    `Character description: ${character.description || "No description provided."}`,
+    `Character scenario: ${character.scenario || "No scenario provided."}`,
+    `Current event chain: ${previousEventChain || "None yet."}`,
+    `Current scene context: ${sceneContext}`,
+    `Event-role instructions: ${eventRole.instructions || ""}`,
+    `Write only the updated event chain.`,
+  ].join("\n");
+
+  const eventOutput = await requestRoleCompletion(
+    eventRole,
+    eventSystemPrompt,
+    recentEventMessages
+  );
+
+  traceStep("event_completed", eventRole.llm || null, {
+    inputMessages: recentEventMessages.length,
+  });
+
+  const mindSystemPrompt = [
+    `You are the Mind LLM for a long-term interactive fiction character.`,
+    `Character name: ${character.name}`,
+    `Nickname in chat: ${character.nickname || character.name}`,
+    `Character description: ${character.description || "No description provided."}`,
+    `Character scenario: ${character.scenario || "No scenario provided."}`,
+    `Previous Mental Synopsis: ${previousMentalSynopsis || "None yet."}`,
+    `Current scene context: ${sceneContext}`,
+    `Mind-role instructions: ${mindRole.instructions || ""}`,
+    `The visible story history below contains authored prose and dialogue. Do not imitate that format.`,
+    `Convert the history into hidden inner state only.`,
+    `Write only the updated Mental Synopsis.`,
+  ].join("\n");
+
+  const rawMindOutput = await requestRoleCompletion(
+    mindRole,
+    mindSystemPrompt,
+    recentMindMessages
+  );
+  const mindOutput = await normalizeMindOutput(mindRole, character, rawMindOutput);
+
+  traceStep("mind_completed", mindRole.llm || null, {
+    inputMessages: recentMindMessages.length,
+  });
+
+  const goalSystemPrompt = [
+    `You are the Mid-Term Goal LLM for a long-term interactive fiction character.`,
+    `Character name: ${character.name}`,
+    `Nickname in chat: ${character.nickname || character.name}`,
+    `Character description: ${character.description || "No description provided."}`,
+    `Character scenario: ${character.scenario || "No scenario provided."}`,
+    `Previous mid-term goals: ${previousMidTermGoals || "None yet."}`,
+    `Updated Mental Synopsis: ${mindOutput}`,
+    `Latest user input: ${userMessage.content}`,
+    `Current scene context: ${sceneContext}`,
+    `Goal-role instructions: ${goalRole.instructions || ""}`,
+    `Write only the updated mid-term goals.`,
+  ].join("\n");
+
+  const goalOutput = await requestRoleCompletion(
+    goalRole,
+    goalSystemPrompt,
+    recentGoalMessages
+  );
+
+  traceStep("mid_term_goal_completed", goalRole.llm || null, {
+    inputMessages: recentGoalMessages.length,
+  });
+
+  const statSystemPrompt = [
+    `You are the Stat LLM for a long-term interactive fiction character.`,
+    `Character name: ${character.name}`,
+    `Nickname in chat: ${character.nickname || character.name}`,
+    `Character description: ${character.description || "No description provided."}`,
+    `Character scenario: ${character.scenario || "No scenario provided."}`,
+    `Current relationship stats: ${previousRelationshipStats}`,
+    `Updated Mental Synopsis: ${mindOutput}`,
+    `Updated Mid-Term Goals: ${goalOutput}`,
+    `Latest user input: ${userMessage.content}`,
+    `Current scene context: ${sceneContext}`,
+    `Stat-role instructions: ${statRole.instructions || ""}`,
+    `Write only the updated relationship stats in the required plain-text format.`,
+  ].join("\n");
+
+  const rawStatOutput = await requestRoleCompletion(
+    statRole,
+    statSystemPrompt,
+    recentStatMessages
+  );
+  const statOutput = normalizeRelationshipStatsOutput(
+    rawStatOutput,
+    previousRelationshipStats
+  );
+
+  traceStep("stat_completed", statRole.llm || null, {
+    inputMessages: recentStatMessages.length,
+  });
 
   const systemPrompt = [
     `You are the author model for a roleplay chat interface.`,
@@ -513,51 +843,34 @@ async function saveChatMessage(chatFileName, content) {
     `Character name: ${character.name}`,
     `Nickname in chat: ${character.nickname || character.name}`,
     `Character description: ${character.description || "No description provided."}`,
+    `Character scenario: ${character.scenario || "No scenario provided."}`,
+    `Mental Synopsis: ${mindOutput}`,
+    `Mid-Term Goals: ${goalOutput}`,
+    `Continuity Notes: ${continuityOutput}`,
+    `Relationship Stats: ${statOutput}`,
+    `Event Chain: ${eventOutput}`,
+    `Current scene context: ${sceneContext}`,
     `Example dialogue:`,
     character.dialogue || "No example dialogue provided.",
     `Author-role instructions: ${authorRole.instructions || ""}`,
     `Stay in character, be conversational, and continue naturally from the conversation history.`,
   ].join("\n");
 
-  const openRouterResponse = await fetch(
-    "https://openrouter.ai/api/v1/chat/completions",
+  const assistantText = await requestRoleCompletion(
     {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: authorRole.llm || OPENROUTER_AUTHOR_MODEL,
-        temperature: Number(authorRole.temperature || 0.9),
-        top_p: Number(authorRole.topP || 0.95),
-        max_tokens: Number(authorRole.maxTokens || 700),
-        messages: [
-          { role: "system", content: systemPrompt },
-          ...draftMessages.map((message) => ({
-            role: message.role,
-            content: message.content,
-          })),
-        ],
-      }),
-    }
+      ...authorRole,
+      llm: authorRole.llm || OPENROUTER_AUTHOR_MODEL,
+      temperature: authorRole.temperature || 0.9,
+      topP: authorRole.topP || 0.95,
+      maxTokens: authorRole.maxTokens || 700,
+    },
+    systemPrompt,
+    draftMessages
   );
 
-  if (!openRouterResponse.ok) {
-    const errorPayload = await openRouterResponse.text();
-    throw new Error(
-      `OpenRouter request failed (${openRouterResponse.status}): ${errorPayload}`
-    );
-  }
-
-  const completion = await openRouterResponse.json();
-  const assistantText = extractAssistantText(
-    completion?.choices?.[0]?.message?.content
-  );
-
-  if (!assistantText) {
-    throw new Error("OpenRouter returned an empty response.");
-  }
+  traceStep("author_completed", authorRole.llm || OPENROUTER_AUTHOR_MODEL, {
+    inputMessages: recentVisibleMessages.length,
+  });
 
   const assistantMessage = {
     id: makeId("msg"),
@@ -566,14 +879,52 @@ async function saveChatMessage(chatFileName, content) {
     createdAt: new Date().toISOString(),
   };
 
-  const nextTitle =
-    chat.title === "New Chat" ? summarizeTitle(userMessage.content) : chat.title;
+  traceStep("author_message_added", null, {
+    messageId: assistantMessage.id,
+    visibleMessageCount: draftMessages.length + 1,
+  });
 
   return saveChat({
     ...chat,
     title: nextTitle,
     characterName: character.name,
     updatedAt: new Date().toISOString(),
+    hiddenState: {
+      ...(chat.hiddenState || {}),
+      mentalSynopsis: {
+        content: mindOutput,
+        updatedAt: new Date().toISOString(),
+        model: mindRole.llm || "",
+      },
+      continuityNotes: {
+        content: continuityOutput,
+        updatedAt: new Date().toISOString(),
+        model: continuityRole.llm || "",
+      },
+      eventChain: {
+        content: eventOutput,
+        updatedAt: new Date().toISOString(),
+        model: eventRole.llm || "",
+      },
+      midTermGoals: {
+        content: goalOutput,
+        updatedAt: new Date().toISOString(),
+        model: goalRole.llm || "",
+      },
+      relationshipStats: {
+        content: statOutput,
+        updatedAt: new Date().toISOString(),
+        model: statRole.llm || "",
+      },
+      authorScene: {
+        content: assistantText,
+        updatedAt: new Date().toISOString(),
+        model: authorRole.llm || OPENROUTER_AUTHOR_MODEL,
+      },
+      pipelineTrace: {
+        lastRun: pipelineTrace,
+      },
+    },
     messages: [...draftMessages, assistantMessage],
   });
 }

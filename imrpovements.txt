@@ -1,0 +1,7 @@
+1. the output can be cut off sometimes. i am not sure if it is actually output, but the text shown in the chat window is cut off
+2. clicking the edit button misaligns the text
+3. creation of a new chat must allow the choosing of a character and a model loadout
+4. make the right sidebar persist with the viewport as the use scrolls
+5. remove the "CHAT SCREEN" subtitle that appears above the agenticwaifu title
+6. refine the size, font of the chat text.
+7. 

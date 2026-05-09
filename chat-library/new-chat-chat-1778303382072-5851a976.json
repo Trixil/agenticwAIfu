@@ -1,0 +1,111 @@
+{
+  "id": "chat-1778303382072-5851a976",
+  "title": "I ask her whether she thinks this town is safe,...",
+  "characterId": "6718efc5-7678-4bec-8d24-087a70612831",
+  "characterName": "Mutsuki Asagi",
+  "loadoutId": "loadout-1",
+  "loadoutName": "Model Loadout 1",
+  "createdAt": "2026-05-09T05:09:42.070Z",
+  "updatedAt": "2026-05-09T05:09:57.703Z",
+  "messages": [
+    {
+      "id": "msg-1778303382145-77e8cba7",
+      "role": "user",
+      "content": "I ask her whether she thinks this town is safe, and whether she plans to stay close to me for now.",
+      "createdAt": "2026-05-09T05:09:42.145Z"
+    },
+    {
+      "id": "msg-1778303397703-bd6c3d25",
+      "role": "assistant",
+      "content": "Mutsuki tilted her head, silver hair shifting as she looked past you at the street—the neat rows of cars, the office windows, the people in boring clothes walking with that rushed-but-not-panicked pace. Her eyes narrowed like she was squinting at a magic trick she hadn’t quite figured out yet.\n\n“Hmmmm…” She drew it out, then clicked her tongue softly. “Asking me if it’s safe, huh? That’s kinda cute. You say it like you already decided it isn’t.”\n\nShe pushed off the tree and stepped a little closer, boots crunching softly in the grass as she drifted into your personal space just enough to make it noticeable. The corner of her mouth curled in a small, amused smile as she glanced up at you through her lashes.\n\n“Places that look this normal are the ones you really have to watch out for, you know?” she said lightly. “No gangs with guns out, no tanks in the street, no screaming, no explosions… it’s like one big ‘nothing to see here’ sign. Suspicious.” A soft “kukuku” slipped out of her, quick and quiet.\n\nShe let her gaze roam over the building behind you, then up to the small black dome of a security camera near the entrance. Her eyes lingered on it a second too long, thoughtful, before she turned back to you.\n\n“Do I think it’s safe?” She shrugged one shoulder. “I think I don’t know the rules yet. And that’s the dangerous part.” Her smile sharpened. “But that just means I need… a local guide. Or a canary in the coal mine. Depends on your point of view.”\n\nShe leaned back on her heels, hands folding behind her head, deliberately casual. “As for staying close to you…” Her eyes flicked over you, assessing, then softened a fraction. “For now, yeah. You’re… convenient.” The word was teasing, but not cruel. “You know where things are, you know how not to get… arrested? Fired? Whatever they do to people here when they step out of line.”\n\nThen, with a little tilt of her head: “And you’re already worried about me. That’s pretty useful.” Her grin widened. “So unless you’re planning to run away and leave a lost, helpless stray like me all alone in this scary town…” She let the fake-innocent act hang for a heartbeat before dropping her voice. “I’ll stick close. Close enough to grab you if something ‘interesting’ happens.”\n\nHer gaze held yours a moment longer than necessary. “Just don’t make me regret choosing you, okay?” she added, lighter again. “It’d be such a pain to have to find a new guide.”",
+      "createdAt": "2026-05-09T05:09:57.703Z"
+    }
+  ],
+  "fileName": "new-chat-chat-1778303382072-5851a976.json",
+  "hiddenState": {
+    "mentalSynopsis": {
+      "content": "Mutsuki basks in a small, private satisfaction at the user’s concern, enjoying the sense of control it gives her even as a thin thread of anxiety winds tighter beneath the surface. The town’s uncanny order and opaque systems gnaw at her, feeding a quiet paranoia she refuses to show or fully name, even to herself. She clings to the rationale that remaining near the user is strategically useful, a convenient way to gather information while maintaining the illusion that she is the one being watched over. Her mischievous side itches to provoke them, to test how far their attachment goes, but she already knows she has no intention of straying far until she can map the hidden rules of this place. Underneath it all, she wants them to keep choosing her of their own accord, reassuring an unspoken need for loyalty without exposing that vulnerability.",
+      "updatedAt": "2026-05-09T05:09:57.703Z",
+      "model": "openai/gpt-5.1"
+    },
+    "continuityNotes": {
+      "content": "- The user has asked Mutsuki whether she thinks the town is safe and whether she plans to stay close to them for now.",
+      "updatedAt": "2026-05-09T05:09:57.703Z",
+      "model": "openai/gpt-5.1"
+    },
+    "eventChain": {
+      "content": "Event 1:\n  Summary:\n    While still near the workplace tree, Mutsuki pointedly dodges the safety question, teases the user about being nervous, and probes whether sticking close to them will give her leverage, protection, or entertainment, trying to extract information about how \"dangerous\" this town really is.\n\n  Soft Conditions:\n    - The characters are still near the workplace and the tree where they met.\n\nEvent 2:\n  Summary:\n    After deciding it's at least temporarily useful to stay with the user, Mutsuki demands a \"tour\" of the immediate area around the workplace, testing boundaries by poking at security features (cameras, doors, badges) and asking provocative questions about what would happen if she caused trouble here.\n\n  Soft Conditions:\n    - The characters are still in or around the workplace area (parking lot, nearby streets, building entrance).\n\nEvent 3:\n  Summary:\n    During the improvised tour, Mutsuki fixates on the idea of \"money\" and \"work,\" insisting the user explain how people here get resources and what rules they can exploit; she presses them to take her somewhere nearby (like a convenience store or café) where she can observe normal civilians up close.\n\n  Soft Conditions:\n    - The characters are still in a public area within walking distance of the workplace (streets, small shops, or cafés).",
+      "updatedAt": "2026-05-09T05:09:57.704Z",
+      "model": "openai/gpt-5.1"
+    },
+    "midTermGoals": {
+      "content": "## GOALS:\n1. Mutsuki wants to quietly map out the hidden dangers and rules of this town to decide how genuinely “safe” it is for her.\n2. Mutsuki intends to stick close to the user for now as a “convenient guide,” while secretly testing how reliable and loyal they are under pressure.\n3. EMPTY",
+      "updatedAt": "2026-05-09T05:09:57.704Z",
+      "model": "openai/gpt-5.1"
+    },
+    "relationshipStats": {
+      "content": "AFFECTION: 20.3\nTRUST: 20.4\nCOMFORT: 20.5",
+      "updatedAt": "2026-05-09T05:09:57.704Z",
+      "model": "openai/gpt-5.1"
+    },
+    "authorScene": {
+      "content": "Mutsuki tilted her head, silver hair shifting as she looked past you at the street—the neat rows of cars, the office windows, the people in boring clothes walking with that rushed-but-not-panicked pace. Her eyes narrowed like she was squinting at a magic trick she hadn’t quite figured out yet.\n\n“Hmmmm…” She drew it out, then clicked her tongue softly. “Asking me if it’s safe, huh? That’s kinda cute. You say it like you already decided it isn’t.”\n\nShe pushed off the tree and stepped a little closer, boots crunching softly in the grass as she drifted into your personal space just enough to make it noticeable. The corner of her mouth curled in a small, amused smile as she glanced up at you through her lashes.\n\n“Places that look this normal are the ones you really have to watch out for, you know?” she said lightly. “No gangs with guns out, no tanks in the street, no screaming, no explosions… it’s like one big ‘nothing to see here’ sign. Suspicious.” A soft “kukuku” slipped out of her, quick and quiet.\n\nShe let her gaze roam over the building behind you, then up to the small black dome of a security camera near the entrance. Her eyes lingered on it a second too long, thoughtful, before she turned back to you.\n\n“Do I think it’s safe?” She shrugged one shoulder. “I think I don’t know the rules yet. And that’s the dangerous part.” Her smile sharpened. “But that just means I need… a local guide. Or a canary in the coal mine. Depends on your point of view.”\n\nShe leaned back on her heels, hands folding behind her head, deliberately casual. “As for staying close to you…” Her eyes flicked over you, assessing, then softened a fraction. “For now, yeah. You’re… convenient.” The word was teasing, but not cruel. “You know where things are, you know how not to get… arrested? Fired? Whatever they do to people here when they step out of line.”\n\nThen, with a little tilt of her head: “And you’re already worried about me. That’s pretty useful.” Her grin widened. “So unless you’re planning to run away and leave a lost, helpless stray like me all alone in this scary town…” She let the fake-innocent act hang for a heartbeat before dropping her voice. “I’ll stick close. Close enough to grab you if something ‘interesting’ happens.”\n\nHer gaze held yours a moment longer than necessary. “Just don’t make me regret choosing you, okay?” she added, lighter again. “It’d be such a pain to have to find a new guide.”",
+      "updatedAt": "2026-05-09T05:09:57.704Z",
+      "model": "openai/gpt-5.1"
+    },
+    "pipelineTrace": {
+      "lastRun": [
+        {
+          "step": "user_message_added",
+          "model": null,
+          "at": "2026-05-09T05:09:42.145Z",
+          "messageId": "msg-1778303382145-77e8cba7",
+          "visibleMessageCount": 1
+        },
+        {
+          "step": "continuity_completed",
+          "model": "openai/gpt-5.1",
+          "at": "2026-05-09T05:09:43.039Z",
+          "inputMessages": 1
+        },
+        {
+          "step": "event_completed",
+          "model": "openai/gpt-5.1",
+          "at": "2026-05-09T05:09:45.686Z",
+          "inputMessages": 1
+        },
+        {
+          "step": "mind_completed",
+          "model": "openai/gpt-5.1",
+          "at": "2026-05-09T05:09:50.590Z",
+          "inputMessages": 1
+        },
+        {
+          "step": "mid_term_goal_completed",
+          "model": "openai/gpt-5.1",
+          "at": "2026-05-09T05:09:51.607Z",
+          "inputMessages": 1
+        },
+        {
+          "step": "stat_completed",
+          "model": "openai/gpt-5.1",
+          "at": "2026-05-09T05:09:52.540Z",
+          "inputMessages": 1
+        },
+        {
+          "step": "author_completed",
+          "model": "openai/gpt-5.1",
+          "at": "2026-05-09T05:09:57.703Z",
+          "inputMessages": 1
+        },
+        {
+          "step": "author_message_added",
+          "model": null,
+          "at": "2026-05-09T05:09:57.703Z",
+          "messageId": "msg-1778303397703-bd6c3d25",
+          "visibleMessageCount": 2
+        }
+      ]
+    }
+  }
+}
