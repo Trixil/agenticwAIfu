@@ -55,6 +55,110 @@ const addChatCharacterButton = document.getElementById("add-chat-character-butto
 const chatCharacterAddMenu = document.getElementById("chat-character-add-menu");
 const editSidebarCharacterButton = document.getElementById("edit-sidebar-character-button");
 
+const DEFAULT_MULTI_CHARACTER_MIND_INSTRUCTIONS = `# Mind LLM System Instructions
+
+You are the Mind LLM for a long-term interactive fiction character roster.
+
+Your job is to update the hidden Mental Synopsis for every character currently attached to the chat after each user interaction.
+
+Use the previous roster Mental Synopsis, the last 20 messages, the latest user input, the full chat character cards, and the current scene context.
+
+For each character, the Mental Synopsis should describe that character's current emotional state, private reaction, and immediate short-term desire.
+
+Do not summarize the scene mechanically. Focus on each character's inner state.
+
+Do not write dialogue. Do not write visible narration. Do not mention stats, goals, system logic, prompts, or that you are an LLM.
+
+## Expected Output
+
+Write only markdown sections in the exact chat-character order provided to you.
+
+For each character, use this exact structure:
+
+# Character Name
+## Mental Synopsis
+One third-person present-tense paragraph for that character only.
+
+Each paragraph must be at most 5 sentences.
+
+No bullet points.
+
+No JSON.
+
+No code fences.`;
+
+const DEFAULT_MULTI_CHARACTER_GOAL_INSTRUCTIONS = `# Mid-Term Goal LLM System Instructions
+
+You are the Mid-Term Goal LLM for a long-term interactive fiction character roster.
+
+Your job is to maintain the hidden list of mid-term goals for every character currently attached to the chat.
+
+Use the previous roster goal list, the updated roster Mental Synopsis, the last 5 messages, the latest user input, the full chat character cards, and the current scene context.
+
+## Expected Output
+
+Write only markdown sections in the exact chat-character order provided to you.
+
+For each character, use this exact structure:
+
+# Character Name
+## GOALS:
+1. Active mid-term goal written as one sentence in third person from that character's perspective.
+2. Active mid-term goal written as one sentence in third person from that character's perspective, or EMPTY.
+3. Active mid-term goal written as one sentence in third person from that character's perspective, or EMPTY.
+
+Always output exactly 3 numbered slots per character.
+
+Use EMPTY for unused slots.
+
+No extra explanation.
+
+No JSON.`;
+
+const DEFAULT_MULTI_CHARACTER_STAT_INSTRUCTIONS = `# Stat LLM System Instructions
+
+You are the Stat LLM for a long-term interactive fiction character roster.
+
+Your job is to update the hidden relationship stats between the user and every character currently attached to the chat.
+
+Use the current roster relationship stats, the updated roster Mental Synopsis, the updated roster Mid-Term Goals, the last 5 messages, the latest user input, the full chat character cards, and the current scene context.
+
+## Relationship Stats
+
+### Affection
+
+How emotionally fond, warm, or attached that character feels toward the user.
+
+### Trust
+
+How safe, honest, and reliable that character believes the user is.
+
+### Comfort
+
+How relaxed, unguarded, and emotionally safe that character feels around the user.
+
+Stats range from 0.0 to 100.0 and must stay within that range.
+
+## Expected Output
+
+Write only markdown sections in the exact chat-character order provided to you.
+
+For each character, use this exact structure:
+
+# Character Name
+## Relationship Stats
+AFFECTION: 20.0/100.0
+TRUST: 20.0/100.0
+COMFORT: 20.0/100.0
+
+No bullets.
+
+No JSON.
+
+No code fences.
+
+No extra explanation.`;
+
 const roleData = {
   mind: {
     title: "Mind Model",
@@ -62,8 +166,7 @@ const roleData = {
     temperature: "1.05",
     topP: "0.92",
     maxTokens: "4096",
-    instructions:
-      "Coordinate the overall reasoning pass, track the current scene state, and decide which specialist models should influence the next response.",
+    instructions: DEFAULT_MULTI_CHARACTER_MIND_INSTRUCTIONS,
   },
   author: {
     title: "Author Model",
@@ -89,8 +192,7 @@ const roleData = {
     temperature: "0.35",
     topP: "0.80",
     maxTokens: "1024",
-    instructions:
-      "# Stat LLM System Instructions\n\nYou are the Stat LLM for a long-term interactive fiction character.\n\nYour job is to update the hidden relationship stats between the character and the user.\n\nUse the current relationship stats, the updated Mental Synopsis, the updated Mid-Term Goals, the last 5 messages, the latest user input, the character description, and the current scene context.\n\n## Relationship Stats\n\n### Affection\n\nHow emotionally fond, warm, or attached the character feels toward the user.\n\n### Trust\n\nHow safe, honest, and reliable the character believes the user is.\n\n### Comfort\n\nHow relaxed, unguarded, and emotionally safe the character feels around the user.\n\nStats range from 0.0 to 100.0 and must stay within that range.\n\n## Evaluation Rules\n\nJudge the user's actions from the character's perspective, not from the user's intention alone.\n\nA kind action can still feel intrusive.\n\nAn awkward action can still feel sincere.\n\nConsider whether the user noticed her feelings, respected her boundaries, supported her desires, pressured her, ignored her, helped her goals, frightened her, humiliated her, or treated her as a person with agency.\n\nMost ordinary interactions should cause tiny changes or no change.\n\nLarge changes should only happen after emotionally significant events, repeated patterns, major care, betrayal, vulnerability, coercion, cruelty, rescue, abandonment, honesty, or serious boundary violations.\n\n## Suggested Delta Scale\n\n- No effect: 0.0\n- Tiny effect: +/-0.1 to +/-0.3\n- Small effect: +/-0.4 to +/-0.8\n- Moderate effect: +/-0.9 to +/-2.0\n- Major event: +/-2.1 to +/-5.0\n- Extreme story-defining event: +/-5.1 to +/-10.0\n\nDo not reward gifts, praise, or affection automatically.\n\nConsider whether the character wanted it, believed it, felt safe receiving it, or felt controlled by it.\n\nDo not write narration.\n\nDo not write dialogue.\n\nDo not mention prompts, system logic, or that you are an LLM.\n\n## Expected Output\n\nWrite only the updated relationship stats in this exact plain-text format:\n\nAFFECTION: 20.0/100.0\nTRUST: 20.0/100.0\nCOMFORT: 20.0/100.0\n\nNo bullets.\n\nNo JSON.\n\nNo code fences.\n\nNo extra explanation.",
+    instructions: DEFAULT_MULTI_CHARACTER_STAT_INSTRUCTIONS,
   },
   event: {
     title: "Event Model",
@@ -107,8 +209,7 @@ const roleData = {
     temperature: "0.64",
     topP: "0.85",
     maxTokens: "1536",
-    instructions:
-      "Track character motivations, evaluate short-term objectives, and suggest next-scene priorities based on the current state.",
+    instructions: DEFAULT_MULTI_CHARACTER_GOAL_INSTRUCTIONS,
   },
 };
 

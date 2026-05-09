@@ -42,6 +42,146 @@ const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "";
 const OPENROUTER_AUTHOR_MODEL =
   process.env.OPENROUTER_AUTHOR_MODEL || "deepseek/deepseek-chat-v3.1";
 
+const DEFAULT_MULTI_CHARACTER_MIND_INSTRUCTIONS = `# Mind LLM System Instructions
+
+You are the Mind LLM for a long-term interactive fiction character roster.
+
+Your job is to update the hidden Mental Synopsis for every character currently attached to the chat after each user interaction.
+
+Use the previous roster Mental Synopsis, the last 20 messages, the latest user input, the full chat character cards, and the current scene context.
+
+For each character, the Mental Synopsis should describe that character's current emotional state, private reaction, and immediate short-term desire.
+
+Do not summarize the scene mechanically. Focus on each character's inner state. A character may feel several emotions at once. Update each character gradually unless recent events justify a strong emotional shift.
+
+Do not write dialogue. Do not write visible narration. Do not mention stats, goals, system logic, prompts, or that you are an LLM.
+
+## Expected Output
+
+Write only markdown sections in the exact chat-character order provided to you.
+
+For each character, use this exact structure:
+
+# Character Name
+## Mental Synopsis
+One third-person present-tense paragraph for that character only.
+
+Each paragraph must be at most 5 sentences.
+
+No bullet points.
+
+No JSON.
+
+No code fences.`;
+
+const DEFAULT_MULTI_CHARACTER_GOAL_INSTRUCTIONS = `# Mid-Term Goal LLM System Instructions
+
+You are the Mid-Term Goal LLM for a long-term interactive fiction character roster.
+
+Your job is to maintain the hidden list of mid-term goals for every character currently attached to the chat. Mid-term goals are more durable than immediate feelings but smaller than life goals.
+
+Use the previous roster goal list, the updated roster Mental Synopsis, the last 5 messages, the latest user input, the full chat character cards, and the current scene context.
+
+Each character must always have at least 1 mid-term goal and at most 3 mid-term goals.
+
+For each character:
+1. Remove any goal that has clearly been completed, invalidated, abandoned, or made irrelevant.
+2. Add a new goal only if that character would naturally develop one, there is room in the list, and the new goal is necessary.
+3. Keep unchanged goals that are still active.
+4. Do not add goals merely to fill all 3 slots.
+
+Good goals should be specific, character-driven, and useful for future story progression.
+
+Avoid vague goals like "be happy" or "get closer."
+
+Do not create goals that force the character to obey the user.
+
+Do not write prose narration. Do not write dialogue. Do not mention stats, system logic, prompts, or that you are an LLM. Do not explain your reasoning.
+
+## Expected Output
+
+Write only markdown sections in the exact chat-character order provided to you.
+
+For each character, use this exact structure:
+
+# Character Name
+## GOALS:
+1. Active mid-term goal written as one sentence in third person from that character's perspective.
+2. Active mid-term goal written as one sentence in third person from that character's perspective, or EMPTY.
+3. Active mid-term goal written as one sentence in third person from that character's perspective, or EMPTY.
+
+Always output exactly 3 numbered slots per character.
+
+Use EMPTY for unused slots.
+
+No extra explanation.
+
+No JSON.`;
+
+const DEFAULT_MULTI_CHARACTER_STAT_INSTRUCTIONS = `# Stat LLM System Instructions
+
+You are the Stat LLM for a long-term interactive fiction character roster.
+
+Your job is to update the hidden relationship stats between the user and every character currently attached to the chat.
+
+Use the current roster relationship stats, the updated roster Mental Synopsis, the updated roster Mid-Term Goals, the last 5 messages, the latest user input, the full chat character cards, and the current scene context.
+
+## Relationship Stats
+
+### Affection
+
+How emotionally fond, warm, or attached that character feels toward the user.
+
+### Trust
+
+How safe, honest, and reliable that character believes the user is.
+
+### Comfort
+
+How relaxed, unguarded, and emotionally safe that character feels around the user.
+
+Stats range from 0.0 to 100.0 and must stay within that range.
+
+Judge the user's actions from each character's perspective, not from the user's intention alone.
+
+A kind action can still feel intrusive.
+
+An awkward action can still feel sincere.
+
+Most ordinary interactions should cause tiny changes or no change.
+
+Large changes should only happen after emotionally significant events, repeated patterns, major care, betrayal, vulnerability, coercion, cruelty, rescue, abandonment, honesty, or serious boundary violations.
+
+Do not reward gifts, praise, or affection automatically.
+
+Consider whether each character wanted it, believed it, felt safe receiving it, or felt controlled by it.
+
+Do not write narration.
+
+Do not write dialogue.
+
+Do not mention prompts, system logic, or that you are an LLM.
+
+## Expected Output
+
+Write only markdown sections in the exact chat-character order provided to you.
+
+For each character, use this exact structure:
+
+# Character Name
+## Relationship Stats
+AFFECTION: 20.0/100.0
+TRUST: 20.0/100.0
+COMFORT: 20.0/100.0
+
+No bullets.
+
+No JSON.
+
+No code fences.
+
+No extra explanation.`;
+
 const defaultCharacters = [
   {
     id: "character-1",
@@ -172,8 +312,7 @@ const defaultLoadouts = [
         temperature: "1.05",
         topP: "0.92",
         maxTokens: "4096",
-        instructions:
-          "Coordinate the overall reasoning pass, track the current scene state, and decide which specialist models should influence the next response.",
+        instructions: DEFAULT_MULTI_CHARACTER_MIND_INSTRUCTIONS,
       },
       author: {
         llm: OPENROUTER_AUTHOR_MODEL,
@@ -196,8 +335,7 @@ const defaultLoadouts = [
         temperature: "0.35",
         topP: "0.80",
         maxTokens: "1024",
-        instructions:
-          "# Stat LLM System Instructions\n\nYou are the Stat LLM for a long-term interactive fiction character.\n\nYour job is to update the hidden relationship stats between the character and the user.\n\nUse the current relationship stats, the updated Mental Synopsis, the updated Mid-Term Goals, the last 5 messages, the latest user input, the character description, and the current scene context.\n\n## Relationship Stats\n\n### Affection\n\nHow emotionally fond, warm, or attached the character feels toward the user.\n\n### Trust\n\nHow safe, honest, and reliable the character believes the user is.\n\n### Comfort\n\nHow relaxed, unguarded, and emotionally safe the character feels around the user.\n\nStats range from 0.0 to 100.0 and must stay within that range.\n\n## Evaluation Rules\n\nJudge the user's actions from the character's perspective, not from the user's intention alone.\n\nA kind action can still feel intrusive.\n\nAn awkward action can still feel sincere.\n\nConsider whether the user noticed her feelings, respected her boundaries, supported her desires, pressured her, ignored her, helped her goals, frightened her, humiliated her, or treated her as a person with agency.\n\nMost ordinary interactions should cause tiny changes or no change.\n\nLarge changes should only happen after emotionally significant events, repeated patterns, major care, betrayal, vulnerability, coercion, cruelty, rescue, abandonment, honesty, or serious boundary violations.\n\n## Suggested Delta Scale\n\n- No effect: 0.0\n- Tiny effect: +/-0.1 to +/-0.3\n- Small effect: +/-0.4 to +/-0.8\n- Moderate effect: +/-0.9 to +/-2.0\n- Major event: +/-2.1 to +/-5.0\n- Extreme story-defining event: +/-5.1 to +/-10.0\n\nDo not reward gifts, praise, or affection automatically.\n\nConsider whether the character wanted it, believed it, felt safe receiving it, or felt controlled by it.\n\nDo not write narration.\n\nDo not write dialogue.\n\nDo not mention prompts, system logic, or that you are an LLM.\n\n## Expected Output\n\nWrite only the updated relationship stats in this exact plain-text format:\n\nAFFECTION: 20.0/100.0\nTRUST: 20.0/100.0\nCOMFORT: 20.0/100.0\n\nNo bullets.\n\nNo JSON.\n\nNo code fences.\n\nNo extra explanation.",
+        instructions: DEFAULT_MULTI_CHARACTER_STAT_INSTRUCTIONS,
       },
       event: {
         llm: "gpt-oss-sim",
@@ -212,8 +350,7 @@ const defaultLoadouts = [
         temperature: "0.64",
         topP: "0.85",
         maxTokens: "1536",
-        instructions:
-          "Track character motivations, evaluate short-term objectives, and suggest next-scene priorities based on the current state.",
+        instructions: DEFAULT_MULTI_CHARACTER_GOAL_INSTRUCTIONS,
       },
     },
   },
@@ -380,6 +517,58 @@ function countParagraphs(text) {
     .filter(Boolean).length;
 }
 
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function extractCharacterSection(rawText, characterName, options = {}) {
+  const text = String(rawText || "").trim();
+  if (!text) {
+    return "";
+  }
+
+  const headingPattern = new RegExp(
+    `(?:^|\\n)#\\s*${escapeRegExp(characterName)}\\s*\\n([\\s\\S]*?)(?=\\n#\\s+|$)`,
+    "i"
+  );
+  const match = text.match(headingPattern);
+  if (match) {
+    return String(match[1] || "").trim();
+  }
+
+  if (options.allowWholeTextFallback && !/^#/m.test(text)) {
+    return text;
+  }
+
+  return "";
+}
+
+function stripLeadingSubheading(text, subheading) {
+  return String(text || "")
+    .replace(new RegExp(`^##\\s*${escapeRegExp(subheading)}\\s*\\n+`, "i"), "")
+    .trim();
+}
+
+function formatMarkdownCharacterState(characterName, subheading, content) {
+  return [`# ${characterName}`, `## ${subheading}`, String(content || "").trim()].join("\n\n");
+}
+
+function buildDefaultRelationshipStatsForCharacters(characters) {
+  return characters
+    .map((character) =>
+      formatMarkdownCharacterState(
+        character.name,
+        "Relationship Stats",
+        [
+          "AFFECTION: 20.0/100.0",
+          "TRUST: 20.0/100.0",
+          "COMFORT: 20.0/100.0",
+        ].join("\n")
+      )
+    )
+    .join("\n\n");
+}
+
 function needsMindRewrite(text) {
   const normalized = String(text || "").trim();
   if (!normalized) {
@@ -405,7 +594,7 @@ function needsMindRewrite(text) {
   return false;
 }
 
-async function normalizeMindOutput(roleConfig, character, rawOutput) {
+async function normalizeMindParagraph(roleConfig, character, rawOutput) {
   if (!needsMindRewrite(rawOutput)) {
     return String(rawOutput || "").trim();
   }
@@ -431,6 +620,30 @@ async function normalizeMindOutput(roleConfig, character, rawOutput) {
     repairPrompt,
     [{ role: "user", content: String(rawOutput || "") }]
   );
+}
+
+async function normalizeMindOutput(roleConfig, characters, rawOutput, previousOutput = "") {
+  const sections = await Promise.all(
+    characters.map(async (character) => {
+      const rawSection = stripLeadingSubheading(
+        extractCharacterSection(rawOutput, character.name, {
+          allowWholeTextFallback: characters.length === 1,
+        }),
+        "Mental Synopsis"
+      );
+      const previousSection = stripLeadingSubheading(
+        extractCharacterSection(previousOutput, character.name, {
+          allowWholeTextFallback: characters.length === 1,
+        }),
+        "Mental Synopsis"
+      );
+      const source = rawSection || previousSection || "She remains emotionally hard to read, with no clear new inner-state update yet.";
+      const normalized = await normalizeMindParagraph(roleConfig, character, source);
+      return formatMarkdownCharacterState(character.name, "Mental Synopsis", normalized);
+    })
+  );
+
+  return sections.join("\n\n");
 }
 
 function extractStatValue(rawText, statName, fallbackValue) {
@@ -468,6 +681,65 @@ function normalizeRelationshipStatsOutput(rawOutput, previousStatsText) {
     `TRUST: ${clamp(trust).toFixed(1)}/100.0`,
     `COMFORT: ${clamp(comfort).toFixed(1)}/100.0`,
   ].join("\n");
+}
+
+function normalizeGoalBlock(rawOutput, previousGoalsText = "") {
+  const source = String(rawOutput || "").trim() || String(previousGoalsText || "").trim();
+  const cleaned = source.replace(/^##\s*GOALS:\s*/i, "").trim();
+  const matches = [...cleaned.matchAll(/(?:^|\n)\s*(\d+)[.)]?\s*(.+)/g)];
+  const slots = ["EMPTY", "EMPTY", "EMPTY"];
+
+  matches.slice(0, 3).forEach((match, index) => {
+    const value = String(match[2] || "").trim();
+    slots[index] = value || "EMPTY";
+  });
+
+  return ["## GOALS:", `1. ${slots[0]}`, `2. ${slots[1]}`, `3. ${slots[2]}`].join("\n");
+}
+
+function normalizeGoalRosterOutput(characters, rawOutput, previousOutput = "") {
+  return characters
+    .map((character) => {
+      const rawSection = stripLeadingSubheading(
+        extractCharacterSection(rawOutput, character.name, {
+          allowWholeTextFallback: characters.length === 1,
+        }),
+        "GOALS:"
+      );
+      const previousSection = stripLeadingSubheading(
+        extractCharacterSection(previousOutput, character.name, {
+          allowWholeTextFallback: characters.length === 1,
+        }),
+        "GOALS:"
+      );
+      const normalized = normalizeGoalBlock(rawSection, previousSection);
+      return `# ${character.name}\n${normalized}`;
+    })
+    .join("\n\n");
+}
+
+function normalizeRelationshipStatsRosterOutput(characters, rawOutput, previousOutput = "") {
+  return characters
+    .map((character) => {
+      const rawSection = stripLeadingSubheading(
+        extractCharacterSection(rawOutput, character.name, {
+          allowWholeTextFallback: characters.length === 1,
+        }),
+        "Relationship Stats"
+      );
+      const previousSection = stripLeadingSubheading(
+        extractCharacterSection(previousOutput, character.name, {
+          allowWholeTextFallback: characters.length === 1,
+        }),
+        "Relationship Stats"
+      );
+      const normalized = normalizeRelationshipStatsOutput(
+        rawSection,
+        previousSection || "AFFECTION: 20.0/100.0\nTRUST: 20.0/100.0\nCOMFORT: 20.0/100.0"
+      );
+      return formatMarkdownCharacterState(character.name, "Relationship Stats", normalized);
+    })
+    .join("\n\n");
 }
 
 async function readRequestBody(request) {
@@ -768,7 +1040,7 @@ async function saveChatMessage(chatFileName, content) {
   const previousMidTermGoals = chat.hiddenState?.midTermGoals?.content || "";
   const previousRelationshipStats =
     chat.hiddenState?.relationshipStats?.content ||
-    "AFFECTION: 20.0/100.0\nTRUST: 20.0/100.0\nCOMFORT: 20.0/100.0";
+    buildDefaultRelationshipStatsForCharacters(chatCharacters);
   const sceneContext = chat.hiddenState?.sceneContext?.content || "No scene context is available yet.";
   const recentVisibleMessages = draftMessages;
   const earliestVisibleExchange = draftMessages.slice(0, Math.min(2, draftMessages.length));
@@ -846,17 +1118,17 @@ async function saveChatMessage(chatFileName, content) {
   });
 
   const mindSystemPrompt = [
-    `You are the Mind LLM for a long-term interactive fiction character.`,
-    `Character name: ${character.name}`,
-    `Nickname in chat: ${character.nickname || character.name}`,
+    `You are the Mind LLM for a long-term interactive fiction character roster.`,
     `Primary responding character: ${character.name}`,
     `Chat characters:\n${characterRosterPrompt}`,
-    `Previous Mental Synopsis: ${previousMentalSynopsis || "None yet."}`,
+    `Previous Mental Synopsis:\n${previousMentalSynopsis || "None yet."}`,
     `Current scene context: ${sceneContext}`,
     `Mind-role instructions: ${mindRole.instructions || ""}`,
     `The visible story history below contains authored prose and dialogue. Do not imitate that format.`,
     `Convert the history into hidden inner state only.`,
-    `Write only the updated Mental Synopsis.`,
+    `Return one markdown section per chat character in the same order they were provided.`,
+    `Use the exact format: # Character Name then ## Mental Synopsis then one paragraph.`,
+    `Write only the updated roster Mental Synopsis.`,
   ].join("\n");
 
   const rawMindOutput = await requestRoleCompletion(
@@ -864,24 +1136,29 @@ async function saveChatMessage(chatFileName, content) {
     mindSystemPrompt,
     recentMindMessages
   );
-  const mindOutput = await normalizeMindOutput(mindRole, character, rawMindOutput);
+  const mindOutput = await normalizeMindOutput(
+    mindRole,
+    chatCharacters,
+    rawMindOutput,
+    previousMentalSynopsis
+  );
 
   traceStep("mind_completed", mindRole.llm || null, {
     inputMessages: recentMindMessages.length,
   });
 
   const goalSystemPrompt = [
-    `You are the Mid-Term Goal LLM for a long-term interactive fiction character.`,
-    `Character name: ${character.name}`,
-    `Nickname in chat: ${character.nickname || character.name}`,
+    `You are the Mid-Term Goal LLM for a long-term interactive fiction character roster.`,
     `Primary responding character: ${character.name}`,
     `Chat characters:\n${characterRosterPrompt}`,
-    `Previous mid-term goals: ${previousMidTermGoals || "None yet."}`,
-    `Updated Mental Synopsis: ${mindOutput}`,
+    `Previous mid-term goals:\n${previousMidTermGoals || "None yet."}`,
+    `Updated Mental Synopsis:\n${mindOutput}`,
     `Latest user input: ${userMessage.content}`,
     `Current scene context: ${sceneContext}`,
     `Goal-role instructions: ${goalRole.instructions || ""}`,
-    `Write only the updated mid-term goals.`,
+    `Return one markdown section per chat character in the same order they were provided.`,
+    `Use the exact format: # Character Name then ## GOALS: then exactly 3 numbered goal slots.`,
+    `Write only the updated roster mid-term goals.`,
   ].join("\n");
 
   const goalOutput = await requestRoleCompletion(
@@ -889,24 +1166,29 @@ async function saveChatMessage(chatFileName, content) {
     goalSystemPrompt,
     recentGoalMessages
   );
+  const normalizedGoalOutput = normalizeGoalRosterOutput(
+    chatCharacters,
+    goalOutput,
+    previousMidTermGoals
+  );
 
   traceStep("mid_term_goal_completed", goalRole.llm || null, {
     inputMessages: recentGoalMessages.length,
   });
 
   const statSystemPrompt = [
-    `You are the Stat LLM for a long-term interactive fiction character.`,
-    `Character name: ${character.name}`,
-    `Nickname in chat: ${character.nickname || character.name}`,
+    `You are the Stat LLM for a long-term interactive fiction character roster.`,
     `Primary responding character: ${character.name}`,
     `Chat characters:\n${characterRosterPrompt}`,
-    `Current relationship stats: ${previousRelationshipStats}`,
-    `Updated Mental Synopsis: ${mindOutput}`,
-    `Updated Mid-Term Goals: ${goalOutput}`,
+    `Current relationship stats:\n${previousRelationshipStats}`,
+    `Updated Mental Synopsis:\n${mindOutput}`,
+    `Updated Mid-Term Goals:\n${normalizedGoalOutput}`,
     `Latest user input: ${userMessage.content}`,
     `Current scene context: ${sceneContext}`,
     `Stat-role instructions: ${statRole.instructions || ""}`,
-    `Write only the updated relationship stats in the required plain-text format.`,
+    `Return one markdown section per chat character in the same order they were provided.`,
+    `Use the exact format: # Character Name then ## Relationship Stats then AFFECTION/TRUST/COMFORT lines.`,
+    `Write only the updated roster relationship stats.`,
   ].join("\n");
 
   const rawStatOutput = await requestRoleCompletion(
@@ -914,7 +1196,8 @@ async function saveChatMessage(chatFileName, content) {
     statSystemPrompt,
     recentStatMessages
   );
-  const statOutput = normalizeRelationshipStatsOutput(
+  const statOutput = normalizeRelationshipStatsRosterOutput(
+    chatCharacters,
     rawStatOutput,
     previousRelationshipStats
   );
@@ -930,10 +1213,10 @@ async function saveChatMessage(chatFileName, content) {
     `Nickname in chat: ${character.nickname || character.name}`,
     `Primary responding character: ${character.name}`,
     `Chat characters:\n${characterRosterPrompt}`,
-    `Mental Synopsis: ${mindOutput}`,
-    `Mid-Term Goals: ${goalOutput}`,
+    `Mental Synopsis by character:\n${mindOutput}`,
+    `Mid-Term Goals by character:\n${normalizedGoalOutput}`,
     `Continuity Notes: ${continuityOutput}`,
-    `Relationship Stats: ${statOutput}`,
+    `Relationship Stats by character:\n${statOutput}`,
     `Event Chain: ${eventOutput}`,
     `Current scene context: ${sceneContext}`,
     `Example dialogue:`,
@@ -993,7 +1276,7 @@ async function saveChatMessage(chatFileName, content) {
         model: eventRole.llm || "",
       },
       midTermGoals: {
-        content: goalOutput,
+        content: normalizedGoalOutput,
         updatedAt: new Date().toISOString(),
         model: goalRole.llm || "",
       },
