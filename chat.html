@@ -132,6 +132,7 @@
                   <button class="loadout-role-button" type="button" data-role-select="stat">Stat Model</button>
                   <button class="loadout-role-button" type="button" data-role-select="event">Event Model</button>
                   <button class="loadout-role-button" type="button" data-role-select="goal">Goal Model</button>
+                  <button class="loadout-role-button" type="button" data-role-select="pipeline">Pipeline</button>
                 </aside>
 
                 <section class="loadout-detail">
@@ -139,29 +140,70 @@
                     <h3 class="loadout-detail-title" id="loadout-role-title">Mind Model</h3>
                   </div>
 
-                  <div class="overlay-field">
-                    <label class="overlay-label" for="editor-role-llm">LLM</label>
-                    <input id="editor-role-llm" class="overlay-input" type="text" value="gpt-oss-cinematic">
+                  <div id="loadout-role-fields">
+                    <div class="overlay-field">
+                      <label class="overlay-label" for="editor-role-llm">LLM</label>
+                      <input id="editor-role-llm" class="overlay-input" type="text" value="gpt-oss-cinematic">
+                    </div>
+
+                    <div class="overlay-grid">
+                      <div class="overlay-field">
+                        <label class="overlay-label" for="editor-temperature">Temperature</label>
+                        <input id="editor-temperature" class="overlay-input" type="text" value="1.05">
+                      </div>
+                      <div class="overlay-field">
+                        <label class="overlay-label" for="editor-top-p">Top P</label>
+                        <input id="editor-top-p" class="overlay-input" type="text" value="0.92">
+                      </div>
+                      <div class="overlay-field">
+                        <label class="overlay-label" for="editor-max-tokens">Max Tokens</label>
+                        <input id="editor-max-tokens" class="overlay-input" type="text" value="4096">
+                      </div>
+                    </div>
+
+                    <div class="overlay-field">
+                      <label class="overlay-label" for="editor-role-instructions">Role Instructions</label>
+                      <textarea id="editor-role-instructions" class="overlay-textarea" rows="8">Coordinate the overall reasoning pass, track the current scene state, and decide which specialist models should influence the next response.</textarea>
+                    </div>
                   </div>
 
-                  <div class="overlay-grid">
-                    <div class="overlay-field">
-                      <label class="overlay-label" for="editor-temperature">Temperature</label>
-                      <input id="editor-temperature" class="overlay-input" type="text" value="1.05">
-                    </div>
-                    <div class="overlay-field">
-                      <label class="overlay-label" for="editor-top-p">Top P</label>
-                      <input id="editor-top-p" class="overlay-input" type="text" value="0.92">
-                    </div>
-                    <div class="overlay-field">
-                      <label class="overlay-label" for="editor-max-tokens">Max Tokens</label>
-                      <input id="editor-max-tokens" class="overlay-input" type="text" value="4096">
-                    </div>
-                  </div>
+                  <div class="loadout-pipeline-editor" id="loadout-pipeline-editor" hidden>
+                    <p class="loadout-pipeline-note">
+                      Checked outputs use the latest value available at runtime. If that step has not run yet this turn, the saved previous chat value is used.
+                    </p>
 
-                  <div class="overlay-field">
-                    <label class="overlay-label" for="editor-role-instructions">Role Instructions</label>
-                    <textarea id="editor-role-instructions" class="overlay-textarea" rows="8">Coordinate the overall reasoning pass, track the current scene state, and decide which specialist models should influence the next response.</textarea>
+                    <div class="loadout-pipeline-section">
+                      <div class="loadout-pipeline-section-header">
+                        <h4 class="loadout-pipeline-section-title">Execution Order</h4>
+                        <p class="loadout-pipeline-section-copy">Drag the steps to change the chain. Author stays pinned last.</p>
+                      </div>
+                      <div class="pipeline-order-list" id="pipeline-order-list"></div>
+                    </div>
+
+                    <div class="loadout-pipeline-section">
+                      <div class="loadout-pipeline-section-header">
+                        <h4 class="loadout-pipeline-section-title" id="pipeline-step-title">Step Settings</h4>
+                        <p class="loadout-pipeline-section-copy" id="pipeline-step-copy">Select a pipeline step to edit its inputs.</p>
+                      </div>
+
+                      <div class="overlay-field">
+                        <span class="overlay-label">Previous Outputs</span>
+                        <div class="pipeline-output-list" id="pipeline-output-list"></div>
+                      </div>
+
+                      <div class="overlay-grid pipeline-settings-grid">
+                        <div class="overlay-field">
+                          <label class="overlay-label" for="pipeline-message-window">Message Window</label>
+                          <input id="pipeline-message-window" class="overlay-input" type="number" min="1" step="1" value="20">
+                        </div>
+                        <div class="overlay-field pipeline-toggle-field">
+                          <label class="pipeline-toggle">
+                            <input id="pipeline-include-character-cards" type="checkbox">
+                            <span>Include Character Cards</span>
+                          </label>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </section>
               </div>

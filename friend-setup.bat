@@ -67,13 +67,21 @@ if exist "%TARGET_DIR%\.git" (
 echo.
 set /p "OPENROUTER_API_KEY=Paste your OpenRouter API key: "
 if "%OPENROUTER_API_KEY%"=="" (
-  echo No API key was entered.
+  echo No OpenRouter API key was entered.
+  pause
+  exit /b 1
+)
+
+set /p "OPENAI_API_KEY=Paste your OpenAI API key: "
+if "%OPENAI_API_KEY%"=="" (
+  echo No OpenAI API key was entered.
   pause
   exit /b 1
 )
 
 > "%TARGET_DIR%\.env" (
   echo OPENROUTER_API_KEY=%OPENROUTER_API_KEY%
+  echo OPENAI_API_KEY=%OPENAI_API_KEY%
 )
 
 echo.

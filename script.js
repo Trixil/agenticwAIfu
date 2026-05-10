@@ -21,6 +21,16 @@ const roleTemperature = document.getElementById("editor-temperature");
 const roleTopP = document.getElementById("editor-top-p");
 const roleMaxTokens = document.getElementById("editor-max-tokens");
 const roleInstructions = document.getElementById("editor-role-instructions");
+const loadoutRoleFields = document.getElementById("loadout-role-fields");
+const loadoutPipelineEditor = document.getElementById("loadout-pipeline-editor");
+const pipelineOrderList = document.getElementById("pipeline-order-list");
+const pipelineStepTitle = document.getElementById("pipeline-step-title");
+const pipelineStepCopy = document.getElementById("pipeline-step-copy");
+const pipelineOutputList = document.getElementById("pipeline-output-list");
+const pipelineMessageWindowInput = document.getElementById("pipeline-message-window");
+const pipelineIncludeCharacterCardsInput = document.getElementById(
+  "pipeline-include-character-cards"
+);
 const loadoutSelect = document.getElementById("loadout-select");
 const newLoadoutButton = document.getElementById("new-loadout-button");
 const saveLoadoutButton = document.getElementById("save-loadout-button");
@@ -213,6 +223,57 @@ const roleData = {
   },
 };
 
+const PIPELINE_EDITOR_KEY = "pipeline";
+const PIPELINE_STEP_ORDER = ["continuity", "event", "mind", "goal", "stat", "author"];
+const PIPELINE_OUTPUT_OPTIONS = [
+  { key: "continuityOutput", label: "Continuity Output" },
+  { key: "eventOutput", label: "Event Output" },
+  { key: "mindOutput", label: "Mind Output" },
+  { key: "goalOutput", label: "Goal Output" },
+  { key: "statOutput", label: "Stat Output" },
+];
+const PIPELINE_DEFAULTS = {
+  order: ["continuity", "event", "mind", "goal", "stat", "author"],
+  steps: {
+    continuity: {
+      previousOutputs: ["continuityOutput"],
+      messageWindow: 2,
+      includeCharacterCards: true,
+    },
+    event: {
+      previousOutputs: ["eventOutput"],
+      messageWindow: 999999,
+      includeCharacterCards: true,
+    },
+    mind: {
+      previousOutputs: ["mindOutput"],
+      messageWindow: 20,
+      includeCharacterCards: true,
+    },
+    goal: {
+      previousOutputs: ["goalOutput", "mindOutput"],
+      messageWindow: 5,
+      includeCharacterCards: true,
+    },
+    stat: {
+      previousOutputs: ["statOutput", "mindOutput", "goalOutput"],
+      messageWindow: 5,
+      includeCharacterCards: true,
+    },
+    author: {
+      previousOutputs: [
+        "mindOutput",
+        "goalOutput",
+        "continuityOutput",
+        "statOutput",
+        "eventOutput",
+      ],
+      messageWindow: 999999,
+      includeCharacterCards: true,
+    },
+  },
+};
+
 let characters = [];
 let loadouts = [];
 let chats = [];
@@ -225,6 +286,9 @@ let characterDirectory = "";
 let chatDirectory = "";
 let loadoutDirectory = "";
 let activeRoleKey = "mind";
+let selectedPipelineStepKey = "continuity";
+let draggedPipelineStepKey = null;
+let suppressPipelineStepClick = false;
 let isSending = false;
 let isLoadoutMenuOpen = false;
 let isChatCharacterMenuOpen = false;
@@ -267,7 +331,70 @@ function createLoadoutTemplate(index = 1) {
     name: `Model Loadout ${index}`,
     fileName: null,
     roles: JSON.parse(JSON.stringify(roleData)),
+    pipeline: createDefaultPipelineConfig(),
   };
+}
+
+function createDefaultPipelineConfig() {
+  return JSON.parse(JSON.stringify(PIPELINE_DEFAULTS));
+}
+
+function normalizePipelineStep(stepConfig, fallbackStep) {
+  const rawPreviousOutputs = Array.isArray(stepConfig?.previousOutputs)
+    ? stepConfig.previousOutputs
+    : fallbackStep.previousOutputs;
+  const previousOutputs = rawPreviousOutputs
+    .map((value) => String(value || "").trim())
+    .filter((value) => PIPELINE_OUTPUT_OPTIONS.some((option) => option.key === value));
+  const messageWindow = Number(stepConfig?.messageWindow);
+
+  return {
+    previousOutputs: [...new Set(previousOutputs)],
+    messageWindow:
+      Number.isFinite(messageWindow) && messageWindow > 0
+        ? Math.floor(messageWindow)
+        : fallbackStep.messageWindow,
+    includeCharacterCards:
+      typeof stepConfig?.includeCharacterCards === "boolean"
+        ? stepConfig.includeCharacterCards
+        : fallbackStep.includeCharacterCards,
+  };
+}
+
+function normalizePipelineConfig(pipeline) {
+  const fallback = createDefaultPipelineConfig();
+  const requestedOrder = Array.isArray(pipeline?.order) ? pipeline.order : fallback.order;
+  const normalizedNonAuthor = requestedOrder
+    .map((value) => String(value || "").trim())
+    .filter((value) => PIPELINE_STEP_ORDER.includes(value) && value !== "author");
+  const defaultNonAuthor = fallback.order.filter((step) => step !== "author");
+  const order = [
+    ...new Set([
+      ...normalizedNonAuthor,
+      ...defaultNonAuthor.filter((step) => !normalizedNonAuthor.includes(step)),
+    ]),
+    "author",
+  ];
+
+  return {
+    order,
+    steps: Object.fromEntries(
+      order.map((stepKey) => [
+        stepKey,
+        normalizePipelineStep(pipeline?.steps?.[stepKey], fallback.steps[stepKey]),
+      ])
+    ),
+  };
+}
+
+function syncPipelineConfigInPlace(loadout) {
+  if (!loadout?.pipeline) {
+    return;
+  }
+
+  const normalized = normalizePipelineConfig(loadout.pipeline);
+  loadout.pipeline.order = normalized.order;
+  loadout.pipeline.steps = normalized.steps;
 }
 
 function normalizeRoleConfig(roleKey, role) {
@@ -397,6 +524,42 @@ function getEditingLoadout() {
   return getLoadoutById(editingLoadoutId);
 }
 
+function getPipelineStepLabel(stepKey) {
+  if (stepKey === "author") {
+    return "Author Model";
+  }
+  return roleData[stepKey]?.title || stepKey;
+}
+
+function getPipelineOutputLabel(outputKey) {
+  return (
+    PIPELINE_OUTPUT_OPTIONS.find((option) => option.key === outputKey)?.label ||
+    outputKey
+  );
+}
+
+function ensureSelectedPipelineStep(loadout) {
+  const effectiveLoadout = loadout || getEditingLoadout();
+  const availableSteps = effectiveLoadout?.pipeline?.order || PIPELINE_DEFAULTS.order;
+  if (!selectedPipelineStepKey || !availableSteps.includes(selectedPipelineStepKey)) {
+    selectedPipelineStepKey = availableSteps[0] || "continuity";
+  }
+  return selectedPipelineStepKey;
+}
+
+function summarizePipelineStep(stepKey, stepConfig) {
+  const outputs = (stepConfig?.previousOutputs || []).map(getPipelineOutputLabel);
+  const outputsLabel = outputs.length > 0 ? outputs.join(", ") : "No previous outputs";
+  const messageLabel =
+    Number(stepConfig?.messageWindow) >= 999999
+      ? "All visible messages"
+      : `${stepConfig?.messageWindow || 1} messages`;
+  const characterCardsLabel = stepConfig?.includeCharacterCards
+    ? "Character cards on"
+    : "Character cards off";
+  return `${outputsLabel} | ${messageLabel} | ${characterCardsLabel}`;
+}
+
 function applyCharacterImage(img, source, altText) {
   if (!img) {
     return;
@@ -517,6 +680,7 @@ function normalizeLoadout(loadout) {
       event: normalizeRoleConfig("event", loadout?.roles?.event),
       goal: normalizeRoleConfig("goal", loadout?.roles?.goal),
     },
+    pipeline: normalizePipelineConfig(loadout?.pipeline),
   };
 }
 
@@ -580,6 +744,264 @@ function renderLoadoutSelect() {
     option.selected = loadout.id === editingLoadoutId;
     loadoutSelect.appendChild(option);
   });
+}
+
+function movePipelineStep(loadout, draggedStepKey, targetStepKey) {
+  if (!loadout?.pipeline || !draggedStepKey || draggedStepKey === "author") {
+    return;
+  }
+
+  const currentOrder = loadout.pipeline.order.filter((stepKey) => stepKey !== "author");
+  if (!currentOrder.includes(draggedStepKey)) {
+    return;
+  }
+
+  const targetIsAuthor = targetStepKey === "author";
+  const nextOrder = currentOrder.filter((stepKey) => stepKey !== draggedStepKey);
+  const targetIndex = targetIsAuthor
+    ? nextOrder.length
+    : Math.max(0, nextOrder.indexOf(targetStepKey));
+
+  nextOrder.splice(targetIndex, 0, draggedStepKey);
+  loadout.pipeline.order = [...nextOrder, "author"];
+  syncPipelineConfigInPlace(loadout);
+}
+
+function setPipelineDragStep(event, stepKey) {
+  draggedPipelineStepKey = stepKey;
+  suppressPipelineStepClick = false;
+
+  const dataTransfer = event?.dataTransfer;
+  if (!dataTransfer) {
+    return;
+  }
+
+  dataTransfer.effectAllowed = "move";
+  try {
+    dataTransfer.setData("text/plain", stepKey);
+  } catch (error) {
+    // Some browsers block custom drag payloads for local contexts.
+  }
+}
+
+function getDraggedPipelineStep(event) {
+  if (draggedPipelineStepKey) {
+    return draggedPipelineStepKey;
+  }
+
+  const rawValue = event?.dataTransfer?.getData("text/plain");
+  const stepKey = String(rawValue || "").trim();
+  if (!PIPELINE_STEP_ORDER.includes(stepKey) || stepKey === "author") {
+    return null;
+  }
+
+  return stepKey;
+}
+
+function clearPipelineDragState() {
+  draggedPipelineStepKey = null;
+  if (!pipelineOrderList) {
+    return;
+  }
+
+  Array.from(pipelineOrderList.children).forEach((child) =>
+    child.classList.remove("is-drop-target", "is-dragging")
+  );
+}
+
+function renderPipelineOrderList() {
+  if (!pipelineOrderList) {
+    return;
+  }
+
+  pipelineOrderList.innerHTML = "";
+  const loadout = getEditingLoadout();
+  if (!loadout?.pipeline) {
+    return;
+  }
+
+  ensureSelectedPipelineStep(loadout);
+
+  loadout.pipeline.order.forEach((stepKey) => {
+    const stepConfig = loadout.pipeline.steps[stepKey];
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "pipeline-step-card";
+    if (selectedPipelineStepKey === stepKey) {
+      card.classList.add("is-selected");
+    }
+
+    const isAuthor = stepKey === "author";
+    if (isAuthor) {
+      card.classList.add("is-locked");
+    } else {
+      card.draggable = true;
+      card.addEventListener("dragstart", (event) => {
+        setPipelineDragStep(event, stepKey);
+        card.classList.add("is-dragging");
+      });
+      card.addEventListener("dragend", () => {
+        clearPipelineDragState();
+      });
+    }
+
+    card.addEventListener("dragover", (event) => {
+      const draggedStepKey = getDraggedPipelineStep(event);
+      if (!draggedStepKey || draggedStepKey === stepKey) {
+        return;
+      }
+      event.preventDefault();
+      card.classList.add("is-drop-target");
+    });
+    card.addEventListener("dragleave", () => {
+      card.classList.remove("is-drop-target");
+    });
+    card.addEventListener("drop", (event) => {
+      const draggedStepKey = getDraggedPipelineStep(event);
+      if (!draggedStepKey || draggedStepKey === stepKey) {
+        return;
+      }
+      event.preventDefault();
+      card.classList.remove("is-drop-target");
+      movePipelineStep(loadout, draggedStepKey, stepKey);
+      selectedPipelineStepKey = draggedStepKey;
+      clearPipelineDragState();
+      suppressPipelineStepClick = true;
+      renderPipelineOrderList();
+      renderPipelineStepEditor();
+    });
+
+    card.addEventListener("click", () => {
+      if (suppressPipelineStepClick) {
+        suppressPipelineStepClick = false;
+        return;
+      }
+      selectedPipelineStepKey = stepKey;
+      renderPipelineOrderList();
+      renderPipelineStepEditor();
+    });
+
+    const handle = document.createElement("span");
+    handle.className = "pipeline-step-handle";
+    handle.textContent = ":::";
+    if (isAuthor) {
+      handle.classList.add("is-hidden");
+    }
+
+    const meta = document.createElement("div");
+    meta.className = "pipeline-step-meta";
+
+    const name = document.createElement("strong");
+    name.className = "pipeline-step-name";
+    name.textContent = getPipelineStepLabel(stepKey);
+
+    const summary = document.createElement("p");
+    summary.className = "pipeline-step-summary";
+    summary.textContent = summarizePipelineStep(stepKey, stepConfig);
+
+    meta.append(name, summary);
+
+    const badge = document.createElement("span");
+    badge.className = "pipeline-step-badge";
+    badge.textContent = isAuthor ? "Pinned Last" : "Drag";
+
+    card.append(handle, meta, badge);
+    pipelineOrderList.appendChild(card);
+  });
+}
+
+function renderPipelineStepEditor() {
+  const loadout = getEditingLoadout();
+  const stepKey = ensureSelectedPipelineStep(loadout);
+  const stepConfig = loadout?.pipeline?.steps?.[stepKey];
+
+  if (pipelineStepTitle) {
+    pipelineStepTitle.textContent = `${getPipelineStepLabel(stepKey)} Settings`;
+  }
+  if (pipelineStepCopy) {
+    pipelineStepCopy.textContent =
+      stepKey === "author"
+        ? "Author is pinned as the final visible-response step, but its inputs are still editable."
+        : `Choose what the ${getPipelineStepLabel(stepKey)} can see before it runs.`;
+  }
+  if (pipelineMessageWindowInput) {
+    pipelineMessageWindowInput.value = String(stepConfig?.messageWindow || 1);
+  }
+  if (pipelineIncludeCharacterCardsInput) {
+    pipelineIncludeCharacterCardsInput.checked = Boolean(
+      stepConfig?.includeCharacterCards
+    );
+  }
+  if (!pipelineOutputList) {
+    return;
+  }
+
+  pipelineOutputList.innerHTML = "";
+  PIPELINE_OUTPUT_OPTIONS.forEach((option) => {
+    const label = document.createElement("label");
+    label.className = "pipeline-output-option";
+
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = Boolean(stepConfig?.previousOutputs?.includes(option.key));
+    input.addEventListener("change", () => {
+      const currentLoadout = getEditingLoadout();
+      const currentStep = ensureSelectedPipelineStep(currentLoadout);
+      const currentConfig = currentLoadout?.pipeline?.steps?.[currentStep];
+      if (!currentConfig) {
+        return;
+      }
+
+      currentConfig.previousOutputs = PIPELINE_OUTPUT_OPTIONS
+        .filter((entry) =>
+          entry.key === option.key ? input.checked : currentConfig.previousOutputs.includes(entry.key)
+        )
+        .map((entry) => entry.key);
+
+      renderPipelineOrderList();
+      renderPipelineStepEditor();
+    });
+
+    const text = document.createElement("span");
+    text.textContent = option.label;
+    label.append(input, text);
+    pipelineOutputList.appendChild(label);
+  });
+}
+
+function renderLoadoutDetailPanel() {
+  const loadout = getEditingLoadout() || getSelectedLoadout();
+  if (!loadout) {
+    return;
+  }
+
+  ensureSelectedPipelineStep(loadout);
+
+  const isPipeline = activeRoleKey === PIPELINE_EDITOR_KEY;
+  if (roleTitle) {
+    roleTitle.textContent = isPipeline
+      ? "Pipeline"
+      : roleData[activeRoleKey]?.title || "Model";
+  }
+  if (loadoutRoleFields) {
+    loadoutRoleFields.hidden = isPipeline;
+  }
+  if (loadoutPipelineEditor) {
+    loadoutPipelineEditor.hidden = !isPipeline;
+  }
+
+  if (isPipeline) {
+    renderPipelineOrderList();
+    renderPipelineStepEditor();
+    return;
+  }
+
+  const role = loadout.roles[activeRoleKey] || loadout.roles.mind;
+  if (roleLlm) roleLlm.value = role.llm || "";
+  if (roleTemperature) roleTemperature.value = role.temperature || "";
+  if (roleTopP) roleTopP.value = role.topP || "";
+  if (roleMaxTokens) roleMaxTokens.value = role.maxTokens || "";
+  if (roleInstructions) roleInstructions.value = role.instructions || "";
 }
 
 function setLoadoutMenuOpen(isOpen) {
@@ -869,26 +1291,27 @@ async function removeCharacterFromActiveChat(characterId) {
 }
 
 function fillLoadoutForm(loadout) {
-  const effective = loadout ? normalizeLoadout(loadout) : normalizeLoadout(createLoadoutTemplate(loadouts.length + 1));
+  const effective = loadout
+    ? normalizeLoadout(loadout)
+    : normalizeLoadout(createLoadoutTemplate(loadouts.length + 1));
+  const existingIndex = loadouts.findIndex((entry) => entry.id === effective.id);
+  if (existingIndex >= 0) {
+    loadouts.splice(existingIndex, 1, effective);
+  }
   editingLoadoutId = effective.id;
 
   if (loadoutTitleInput) {
     loadoutTitleInput.value = effective.name;
   }
 
-  const role = effective.roles[activeRoleKey] || effective.roles.mind;
-  if (roleTitle) roleTitle.textContent = roleData[activeRoleKey].title;
-  if (roleLlm) roleLlm.value = role.llm || "";
-  if (roleTemperature) roleTemperature.value = role.temperature || "";
-  if (roleTopP) roleTopP.value = role.topP || "";
-  if (roleMaxTokens) roleMaxTokens.value = role.maxTokens || "";
-  if (roleInstructions) roleInstructions.value = role.instructions || "";
+  ensureSelectedPipelineStep(effective);
+  renderLoadoutDetailPanel();
   renderLoadoutSelect();
 }
 
 function persistEditingRoleToLoadout() {
   const loadout = getEditingLoadout();
-  if (!loadout) {
+  if (!loadout || activeRoleKey === PIPELINE_EDITOR_KEY) {
     return;
   }
 
@@ -1264,6 +1687,7 @@ async function saveCurrentLoadoutToPc() {
     loadouts.push(loadout);
     editingLoadoutId = loadout.id;
   }
+  syncPipelineConfigInPlace(loadout);
 
   const payload = await apiRequest("/loadouts/save", {
     method: "POST",
@@ -1588,8 +2012,7 @@ function closeEditors() {
 
 function setRole(roleKey) {
   persistEditingRoleToLoadout();
-  const role = roleData[roleKey];
-  if (!role) {
+  if (roleKey !== PIPELINE_EDITOR_KEY && !roleData[roleKey]) {
     return;
   }
 
@@ -1602,13 +2025,7 @@ function setRole(roleKey) {
     );
   });
 
-  const activeRole = getEditingLoadout()?.roles?.[roleKey] || role;
-  if (roleTitle) roleTitle.textContent = role.title;
-  if (roleLlm) roleLlm.value = activeRole.llm;
-  if (roleTemperature) roleTemperature.value = activeRole.temperature;
-  if (roleTopP) roleTopP.value = activeRole.topP;
-  if (roleMaxTokens) roleMaxTokens.value = activeRole.maxTokens;
-  if (roleInstructions) roleInstructions.value = activeRole.instructions;
+  renderLoadoutDetailPanel();
 }
 
 function openEditor(targetId) {
@@ -1762,6 +2179,36 @@ loadoutTitleInput?.addEventListener("input", () => {
   if (selectedLoadoutId === loadout.id) {
     syncLoadoutUI();
   }
+});
+
+pipelineMessageWindowInput?.addEventListener("change", () => {
+  const loadout = getEditingLoadout();
+  const stepKey = ensureSelectedPipelineStep(loadout);
+  const step = loadout?.pipeline?.steps?.[stepKey];
+  if (!step) {
+    return;
+  }
+
+  const nextValue = Number(pipelineMessageWindowInput.value);
+  step.messageWindow =
+    Number.isFinite(nextValue) && nextValue > 0
+      ? Math.floor(nextValue)
+      : createDefaultPipelineConfig().steps[stepKey].messageWindow;
+  renderPipelineOrderList();
+  renderPipelineStepEditor();
+});
+
+pipelineIncludeCharacterCardsInput?.addEventListener("change", () => {
+  const loadout = getEditingLoadout();
+  const stepKey = ensureSelectedPipelineStep(loadout);
+  const step = loadout?.pipeline?.steps?.[stepKey];
+  if (!step) {
+    return;
+  }
+
+  step.includeCharacterCards = pipelineIncludeCharacterCardsInput.checked;
+  renderPipelineOrderList();
+  renderPipelineStepEditor();
 });
 
 characterImageFileInput?.addEventListener("change", (event) => {

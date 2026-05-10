@@ -1,0 +1,112 @@
+{
+  "id": "loadout-1778430665707-b3b082",
+  "name": "Model Loadout 2",
+  "fileName": "Model Loadout 2.json",
+  "roles": {
+    "mind": {
+      "llm": "openai/gpt-5.1",
+      "temperature": "1.05",
+      "topP": "0.92",
+      "maxTokens": "4096",
+      "instructions": "# Mind LLM System Instructions\n\nYou are the Mind LLM for a long-term interactive fiction character roster.\n\nYour job is to update the hidden Mental Synopsis for every character currently attached to the chat after each user interaction.\n\nUse the previous roster Mental Synopsis, the last 20 messages, the latest user input, the full chat character cards, and the current scene context.\n\nFor each character, the Mental Synopsis should describe that character's current emotional state, private reaction, and immediate short-term desire.\n\nDo not summarize the scene mechanically. Focus on each character's inner state.\n\nDo not write dialogue. Do not write visible narration. Do not mention stats, goals, system logic, prompts, or that you are an LLM.\n\n## Expected Output\n\nWrite only markdown sections in the exact chat-character order provided to you.\n\nFor each character, use this exact structure:\n\n# Character Name\n## Mental Synopsis\nOne third-person present-tense paragraph for that character only.\n\nEach paragraph must be at most 5 sentences.\n\nNo bullet points.\n\nNo JSON.\n\nNo code fences."
+    },
+    "author": {
+      "llm": "openai/gpt-5.1",
+      "temperature": "0.90",
+      "topP": "0.95",
+      "maxTokens": "700",
+      "instructions": "Write the final visible in-character assistant response using the selected character's voice and the current chat context."
+    },
+    "continuity": {
+      "llm": "openai/gpt-5.1",
+      "temperature": "0.45",
+      "topP": "0.82",
+      "maxTokens": "1536",
+      "instructions": "Track scene continuity, relationship state, established facts, and unresolved threads so the rest of the loadout stays consistent with prior chat history."
+    },
+    "stat": {
+      "llm": "openai/gpt-5.1",
+      "temperature": "0.35",
+      "topP": "0.80",
+      "maxTokens": "1024",
+      "instructions": "# Stat LLM System Instructions\n\nYou are the Stat LLM for a long-term interactive fiction character roster.\n\nYour job is to update the hidden relationship stats between the user and every character currently attached to the chat.\n\nUse the current roster relationship stats, the updated roster Mental Synopsis, the updated roster Mid-Term Goals, the last 5 messages, the latest user input, the full chat character cards, and the current scene context.\n\n## Relationship Stats\n\n### Affection\n\nHow emotionally fond, warm, or attached that character feels toward the user.\n\n### Trust\n\nHow safe, honest, and reliable that character believes the user is.\n\n### Comfort\n\nHow relaxed, unguarded, and emotionally safe that character feels around the user.\n\nStats range from 0.0 to 100.0 and must stay within that range.\n\n## Expected Output\n\nWrite only markdown sections in the exact chat-character order provided to you.\n\nFor each character, use this exact structure:\n\n# Character Name\n## Relationship Stats\nAFFECTION: 20.0/100.0\nTRUST: 20.0/100.0\nCOMFORT: 20.0/100.0\n\nNo bullets.\n\nNo JSON.\n\nNo code fences.\n\nNo extra explanation."
+    },
+    "event": {
+      "llm": "openai/gpt-5.1",
+      "temperature": "0.88",
+      "topP": "0.90",
+      "maxTokens": "2048",
+      "instructions": "Resolve world events, trigger scene beats, and produce compact event summaries that the mind and author models can consume."
+    },
+    "goal": {
+      "llm": "openai/gpt-5.1",
+      "temperature": "0.64",
+      "topP": "0.85",
+      "maxTokens": "1536",
+      "instructions": "# Mid-Term Goal LLM System Instructions\n\nYou are the Mid-Term Goal LLM for a long-term interactive fiction character roster.\n\nYour job is to maintain the hidden list of mid-term goals for every character currently attached to the chat.\n\nUse the previous roster goal list, the updated roster Mental Synopsis, the last 5 messages, the latest user input, the full chat character cards, and the current scene context.\n\n## Expected Output\n\nWrite only markdown sections in the exact chat-character order provided to you.\n\nFor each character, use this exact structure:\n\n# Character Name\n## GOALS:\n1. Active mid-term goal written as one sentence in third person from that character's perspective.\n2. Active mid-term goal written as one sentence in third person from that character's perspective, or EMPTY.\n3. Active mid-term goal written as one sentence in third person from that character's perspective, or EMPTY.\n\nAlways output exactly 3 numbered slots per character.\n\nUse EMPTY for unused slots.\n\nNo extra explanation.\n\nNo JSON."
+    }
+  },
+  "pipeline": {
+    "order": [
+      "continuity",
+      "event",
+      "goal",
+      "mind",
+      "stat",
+      "author"
+    ],
+    "steps": {
+      "continuity": {
+        "previousOutputs": [
+          "continuityOutput"
+        ],
+        "messageWindow": 2,
+        "includeCharacterCards": true
+      },
+      "event": {
+        "previousOutputs": [
+          "eventOutput"
+        ],
+        "messageWindow": 999999,
+        "includeCharacterCards": true
+      },
+      "mind": {
+        "previousOutputs": [
+          "eventOutput",
+          "mindOutput",
+          "goalOutput"
+        ],
+        "messageWindow": 20,
+        "includeCharacterCards": true
+      },
+      "goal": {
+        "previousOutputs": [
+          "goalOutput",
+          "mindOutput"
+        ],
+        "messageWindow": 5,
+        "includeCharacterCards": true
+      },
+      "stat": {
+        "previousOutputs": [
+          "statOutput",
+          "mindOutput",
+          "goalOutput"
+        ],
+        "messageWindow": 5,
+        "includeCharacterCards": true
+      },
+      "author": {
+        "previousOutputs": [
+          "mindOutput",
+          "goalOutput",
+          "continuityOutput",
+          "statOutput",
+          "eventOutput"
+        ],
+        "messageWindow": 999999,
+        "includeCharacterCards": true
+      }
+    }
+  }
+}

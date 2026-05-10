@@ -1303,6 +1303,171 @@ h2 {
   line-height: 0.98;
 }
 
+.loadout-pipeline-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.loadout-pipeline-note,
+.loadout-pipeline-section-copy {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.loadout-pipeline-note {
+  padding: 16px 18px;
+  border: 1px solid rgba(255, 240, 214, 0.08);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.loadout-pipeline-section {
+  padding: 18px;
+  border: 1px solid rgba(255, 240, 214, 0.08);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.loadout-pipeline-section-header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.loadout-pipeline-section-title {
+  margin: 0;
+  font-family: "Fraunces", Georgia, serif;
+  font-size: 1.15rem;
+}
+
+.pipeline-order-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pipeline-step-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  width: 100%;
+  padding: 14px 16px;
+  border: 1px solid rgba(255, 240, 214, 0.1);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 180ms ease, background 180ms ease, transform 180ms ease;
+}
+
+.pipeline-step-card:hover,
+.pipeline-step-card.is-drop-target {
+  border-color: rgba(217, 168, 94, 0.32);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.pipeline-step-card.is-selected {
+  border-color: rgba(217, 168, 94, 0.42);
+  background: linear-gradient(135deg, rgba(217, 168, 94, 0.14), rgba(217, 121, 95, 0.08));
+}
+
+.pipeline-step-card.is-locked {
+  cursor: default;
+}
+
+.pipeline-step-card.is-dragging {
+  opacity: 0.55;
+}
+
+.pipeline-step-handle {
+  color: rgba(255, 240, 214, 0.58);
+  font-size: 1rem;
+  letter-spacing: 0.12em;
+}
+
+.pipeline-step-handle.is-hidden {
+  visibility: hidden;
+}
+
+.pipeline-step-meta {
+  min-width: 0;
+}
+
+.pipeline-step-name {
+  display: block;
+  margin-bottom: 4px;
+  font-weight: 700;
+}
+
+.pipeline-step-summary {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.pipeline-step-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 7px 10px;
+  border: 1px solid rgba(255, 240, 214, 0.1);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.pipeline-output-list {
+  display: grid;
+  gap: 10px;
+}
+
+.pipeline-output-option,
+.pipeline-toggle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid rgba(255, 240, 214, 0.08);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--text);
+  line-height: 1.45;
+}
+
+.pipeline-output-option input,
+.pipeline-toggle input {
+  margin: 0;
+  accent-color: rgb(217, 168, 94);
+}
+
+.pipeline-output-option span,
+.pipeline-toggle span {
+  flex: 1;
+}
+
+.pipeline-settings-grid {
+  align-items: end;
+}
+
+.pipeline-toggle-field {
+  display: flex;
+  align-items: stretch;
+}
+
+.pipeline-toggle {
+  width: 100%;
+  min-height: 60px;
+}
+
 .overlay-field {
   min-width: 0;
   margin-bottom: 14px;

@@ -2,6 +2,16 @@
 2. clicking the edit button misaligns the text
 3. creation of a new chat must allow the choosing of a character and a model loadout
 4. make the right sidebar persist with the viewport as the use scrolls
-5. remove the "CHAT SCREEN" subtitle that appears above the agenticwaifu title
+5. remove the "CHAT SCREEN" subtitle that appears above the agenticwaifu titleS
 6. refine the size, font of the chat text.
-7. 
+7. replace "Character cards on" with "Character cards" in the pipeline  view
+8. remove "DRAG" bubble from the pipeline view
+9. "Add Character" bubble is overflowing on the right sidebar.
+10. align "MODEL LOADOUT" with the yellow arrow
+11. make the sidebars scroll in the chat.html
+12. add a clone loadout  button
+13.
+major improvements:
+1. shortening mental synopsis length
+2. making the continuity llm examine 30 messages before the last.
+3.

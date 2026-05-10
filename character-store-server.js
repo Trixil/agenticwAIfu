@@ -7,6 +7,7 @@ const HOST = "127.0.0.1";
 const PORT = 4317;
 const CHARACTER_DIR = path.join(__dirname, "character-library");
 const CHAT_DIR = path.join(__dirname, "chat-library");
+const PIPELINE_DEBUG_DIR = path.join(CHAT_DIR, "pipeline-debug");
 const LOADOUT_DIR = path.join(__dirname, "loadout-library");
 const ENV_PATH = path.join(__dirname, ".env");
 
@@ -41,6 +42,99 @@ loadDotEnv(ENV_PATH);
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "";
 const OPENROUTER_AUTHOR_MODEL =
   process.env.OPENROUTER_AUTHOR_MODEL || "deepseek/deepseek-chat-v3.1";
+
+const PIPELINE_STEP_KEYS = ["continuity", "event", "mind", "goal", "stat", "author"];
+
+const PIPELINE_OUTPUT_KEYS = {
+  continuity: "continuityOutput",
+  event: "eventOutput",
+  mind: "mindOutput",
+  goal: "goalOutput",
+  stat: "statOutput",
+  author: "authorOutput",
+};
+
+const PIPELINE_OUTPUT_LABELS = {
+  continuityOutput: "Continuity Output",
+  eventOutput: "Event Output",
+  mindOutput: "Mind Output",
+  goalOutput: "Goal Output",
+  statOutput: "Stat Output",
+  authorOutput: "Author Output",
+};
+
+const PIPELINE_OUTPUT_TO_HIDDEN_STATE = {
+  continuityOutput: "continuityNotes",
+  eventOutput: "eventChain",
+  mindOutput: "mentalSynopsis",
+  goalOutput: "midTermGoals",
+  statOutput: "relationshipStats",
+  authorOutput: "authorScene",
+};
+
+const PIPELINE_PREVIOUS_OUTPUT_OPTIONS = [
+  "continuityOutput",
+  "eventOutput",
+  "mindOutput",
+  "goalOutput",
+  "statOutput",
+  "authorOutput",
+];
+
+const DEFAULT_PIPELINE_CONFIG = {
+  order: ["continuity", "event", "mind", "goal", "stat", "author"],
+  steps: {
+    continuity: {
+      previousOutputs: ["continuityOutput"],
+      messageWindow: 2,
+      includeCharacterCards: true,
+    },
+    event: {
+      previousOutputs: ["eventOutput"],
+      messageWindow: 999999,
+      includeCharacterCards: true,
+    },
+    mind: {
+      previousOutputs: ["mindOutput"],
+      messageWindow: 20,
+      includeCharacterCards: true,
+    },
+    goal: {
+      previousOutputs: ["goalOutput", "mindOutput"],
+      messageWindow: 5,
+      includeCharacterCards: true,
+    },
+    stat: {
+      previousOutputs: ["statOutput", "mindOutput", "goalOutput"],
+      messageWindow: 5,
+      includeCharacterCards: true,
+    },
+    author: {
+      previousOutputs: [
+        "mindOutput",
+        "goalOutput",
+        "continuityOutput",
+        "statOutput",
+        "eventOutput",
+      ],
+      messageWindow: 999999,
+      includeCharacterCards: true,
+    },
+  },
+};
+
+const PIPELINE_TRACE_LABELS = {
+  continuity: "continuity_completed",
+  event: "event_completed",
+  mind: "mind_completed",
+  goal: "mid_term_goal_completed",
+  stat: "stat_completed",
+  author: "author_completed",
+};
+
+function createDefaultPipelineConfig() {
+  return JSON.parse(JSON.stringify(DEFAULT_PIPELINE_CONFIG));
+}
 
 const DEFAULT_MULTI_CHARACTER_MIND_INSTRUCTIONS = `# Mind LLM System Instructions
 
@@ -306,6 +400,7 @@ const defaultLoadouts = [
   {
     id: "loadout-1",
     name: "Model Loadout 1",
+    pipeline: createDefaultPipelineConfig(),
     roles: {
       mind: {
         llm: "gpt-oss-cinematic",
@@ -376,6 +471,56 @@ function sanitizeRole(role, fallbackRole) {
   };
 }
 
+function sanitizePipelineStep(stepConfig, fallbackStepConfig) {
+  const rawPreviousOutputs = Array.isArray(stepConfig?.previousOutputs)
+    ? stepConfig.previousOutputs
+    : fallbackStepConfig.previousOutputs;
+  const previousOutputs = rawPreviousOutputs
+    .map((value) => String(value || "").trim())
+    .filter((value) => PIPELINE_PREVIOUS_OUTPUT_OPTIONS.includes(value));
+
+  const normalizedWindow = Number(stepConfig?.messageWindow);
+  const fallbackWindow = Number(fallbackStepConfig.messageWindow);
+  const messageWindow =
+    Number.isFinite(normalizedWindow) && normalizedWindow > 0
+      ? Math.floor(normalizedWindow)
+      : fallbackWindow;
+
+  return {
+    previousOutputs: [...new Set(previousOutputs)],
+    messageWindow,
+    includeCharacterCards:
+      typeof stepConfig?.includeCharacterCards === "boolean"
+        ? stepConfig.includeCharacterCards
+        : fallbackStepConfig.includeCharacterCards,
+  };
+}
+
+function sanitizePipeline(pipeline) {
+  const fallback = createDefaultPipelineConfig();
+  const rawOrder = Array.isArray(pipeline?.order) ? pipeline.order : fallback.order;
+  const normalizedNonAuthorOrder = rawOrder
+    .map((value) => String(value || "").trim())
+    .filter((value) => PIPELINE_STEP_KEYS.includes(value) && value !== "author");
+  const defaultNonAuthorOrder = fallback.order.filter((step) => step !== "author");
+  const order = [
+    ...new Set([
+      ...normalizedNonAuthorOrder,
+      ...defaultNonAuthorOrder.filter((step) => !normalizedNonAuthorOrder.includes(step)),
+    ]),
+    "author",
+  ];
+
+  const steps = Object.fromEntries(
+    order.map((stepKey) => [
+      stepKey,
+      sanitizePipelineStep(pipeline?.steps?.[stepKey], fallback.steps[stepKey]),
+    ])
+  );
+
+  return { order, steps };
+}
+
 function sanitizeLoadout(loadout) {
   const fallback = defaultLoadouts[0];
   return {
@@ -399,6 +544,7 @@ function sanitizeLoadout(loadout) {
       ),
       goal: sanitizeRole(loadout?.roles?.goal, defaultRoleConfig(fallback.roles.goal)),
     },
+    pipeline: sanitizePipeline(loadout?.pipeline),
   };
 }
 
@@ -473,6 +619,96 @@ function buildRoleRequestMessages(systemPrompt, conversationMessages) {
       content: message.content,
     })),
   ];
+}
+
+function formatIsoTimestampForFile(value) {
+  return String(value || new Date().toISOString()).replace(/[:.]/g, "-");
+}
+
+function formatTextBlock(value, fallback = "") {
+  const normalized = String(value || "").trim();
+  return normalized || fallback;
+}
+
+function formatPipelineMessagesForDebug(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return "[none]";
+  }
+
+  return messages
+    .map(
+      (message, index) =>
+        `-- Message ${index + 1} (${message.role || "unknown"}) --\n${formatTextBlock(
+          message.content,
+          "[empty]"
+        )}`
+    )
+    .join("\n\n");
+}
+
+function buildPipelineDebugText(debugRun) {
+  const lines = [];
+  lines.push("=== Run Metadata ===");
+  lines.push(`Run Started At: ${debugRun.startedAt || ""}`);
+  lines.push(`Run Status: ${debugRun.status || "unknown"}`);
+  lines.push(`Chat ID: ${debugRun.chatId || ""}`);
+  lines.push(`Chat File: ${debugRun.chatFileName || ""}`);
+  lines.push(`Loadout Name: ${debugRun.loadoutName || ""}`);
+  lines.push(`Configured Pipeline Order: ${(debugRun.pipelineOrder || []).join(" -> ")}`);
+  if (debugRun.errorMessage) {
+    lines.push(`Error: ${debugRun.errorMessage}`);
+  }
+
+  (debugRun.steps || []).forEach((step, index) => {
+    lines.push("");
+    lines.push(`=== Step ${index + 1}: ${step.stepName} ===`);
+    lines.push(`Model: ${step.model || ""}`);
+    lines.push(`Output Key: ${step.outputKey || ""}`);
+    lines.push(`Message Window Used: ${step.messageWindowLabel || ""}`);
+    lines.push(
+      `Include Character Cards: ${step.includeCharacterCards ? "yes" : "no"}`
+    );
+    lines.push(
+      `Requested Previous Outputs: ${
+        step.previousOutputsRequested?.length
+          ? step.previousOutputsRequested.join(", ")
+          : "[none]"
+      }`
+    );
+    lines.push("");
+    lines.push("Input Messages:");
+    lines.push(formatPipelineMessagesForDebug(step.inputMessages));
+    lines.push("");
+    lines.push("Resolved Previous Outputs:");
+    if (step.resolvedInputs?.length) {
+      step.resolvedInputs.forEach((input) => {
+        lines.push(
+          `- ${input.label} [${input.outputKey}] (${input.source})`
+        );
+        lines.push(formatTextBlock(input.value, "[empty]"));
+        lines.push("");
+      });
+    } else {
+      lines.push("[none]");
+      lines.push("");
+    }
+    lines.push("Raw Step Prompt:");
+    lines.push(formatTextBlock(step.systemPrompt, "[empty]"));
+  });
+
+  return `${lines.join("\n")}\n`;
+}
+
+async function writePipelineDebugFile(debugRun) {
+  await ensureDirectories();
+  const fileName = `${slugify(debugRun.chatId || "chat")}-${formatIsoTimestampForFile(
+    debugRun.startedAt
+  )}-pipeline.txt`;
+  await fs.writeFile(
+    path.join(PIPELINE_DEBUG_DIR, fileName),
+    buildPipelineDebugText(debugRun),
+    "utf8"
+  );
 }
 
 async function requestRoleCompletion(roleConfig, systemPrompt, conversationMessages) {
@@ -742,6 +978,363 @@ function normalizeRelationshipStatsRosterOutput(characters, rawOutput, previousO
     .join("\n\n");
 }
 
+function resolvePipelineInput(outputKey, currentOutputs, previousHiddenState, characters) {
+  const currentValue = String(currentOutputs?.[outputKey] || "").trim();
+  if (currentValue) {
+    return {
+      value: currentValue,
+      source: "current run output",
+    };
+  }
+
+  const previousValue = String(previousHiddenState?.[outputKey] || "").trim();
+  if (previousValue) {
+    return {
+      value: previousValue,
+      source: "previous hidden state fallback",
+    };
+  }
+
+  if (outputKey === "statOutput") {
+    return {
+      value: buildDefaultRelationshipStatsForCharacters(characters),
+      source: "default fallback",
+    };
+  }
+
+  return {
+    value: "None yet.",
+    source: "default fallback",
+  };
+}
+
+function getPipelineInputValue(outputKey, currentOutputs, previousHiddenState, characters) {
+  return resolvePipelineInput(outputKey, currentOutputs, previousHiddenState, characters).value;
+}
+
+function buildPipelineInputData(stepName, stepConfig, runtimeState) {
+  const sections = [];
+  const resolvedInputs = [];
+
+  if (stepConfig?.includeCharacterCards) {
+    sections.push(`Chat characters:\n${runtimeState.characterRosterPrompt}`);
+  }
+
+  (stepConfig?.previousOutputs || []).forEach((outputKey) => {
+    const label = PIPELINE_OUTPUT_LABELS[outputKey] || outputKey;
+    const resolved = resolvePipelineInput(
+      outputKey,
+      runtimeState.currentOutputs,
+      runtimeState.previousHiddenState,
+      runtimeState.chatCharacters
+    );
+    sections.push(`${label}:\n${resolved.value}`);
+    resolvedInputs.push({
+      outputKey,
+      label,
+      value: resolved.value,
+      source: resolved.source,
+    });
+  });
+
+  if (stepName === "author") {
+    sections.push(
+      `Example dialogue:\n${runtimeState.character.dialogue || "No example dialogue provided."}`
+    );
+  }
+
+  return {
+    sections,
+    resolvedInputs,
+  };
+}
+
+function getPipelineMessages(stepName, messageWindow, draftMessages) {
+  const messages = Array.isArray(draftMessages) ? draftMessages : [];
+  if (messages.length === 0) {
+    return [{ role: "user", content: "" }];
+  }
+
+  const normalizedWindow = Number(messageWindow);
+  if (!Number.isFinite(normalizedWindow) || normalizedWindow <= 0) {
+    return messages;
+  }
+
+  const count = Math.max(1, Math.floor(normalizedWindow));
+  if (stepName === "continuity") {
+    return messages.slice(0, Math.min(count, messages.length));
+  }
+
+  if (count >= messages.length) {
+    return messages;
+  }
+
+  return messages.slice(-count);
+}
+
+async function executePipelineStep(stepName, runtimeState) {
+  const stepConfig = runtimeState.pipeline?.steps?.[stepName];
+  if (!stepConfig) {
+    throw new Error(`No pipeline inputs configured for step "${stepName}".`);
+  }
+
+  const inputData = buildPipelineInputData(stepName, stepConfig, runtimeState);
+  const inputSections = inputData.sections;
+  const inputMessages = getPipelineMessages(
+    stepName,
+    stepConfig.messageWindow,
+    runtimeState.draftMessages
+  );
+  const sharedPrelude = [
+    `Character name: ${runtimeState.character.name}`,
+    `Nickname in chat: ${runtimeState.character.nickname || runtimeState.character.name}`,
+    `Primary responding character: ${runtimeState.character.name}`,
+    ...inputSections,
+  ];
+  const normalizedWindow = Number(stepConfig.messageWindow);
+  const windowCount = Math.max(1, Math.floor(normalizedWindow || 1));
+  const messageWindowLabel = !Number.isFinite(normalizedWindow) || normalizedWindow <= 0
+    ? "all visible messages (invalid or disabled window)"
+    : stepName === "continuity"
+      ? `earliest ${Math.min(windowCount, runtimeState.draftMessages.length)} visible messages`
+      : windowCount >= runtimeState.draftMessages.length
+        ? "all visible messages"
+        : `latest ${windowCount} visible messages`;
+
+  switch (stepName) {
+    case "continuity": {
+      const role = runtimeState.roles.continuity;
+      const systemPrompt = [
+        `You are the Continuity LLM for a long-term interactive fiction story.`,
+        ...sharedPrelude,
+        `You must examine only the earliest visible exchange provided below.`,
+        `Continuity-role instructions: ${role.instructions || ""}`,
+        `Write only the updated continuity notes.`,
+      ].join("\n");
+
+      const output = await requestRoleCompletion(role, systemPrompt, inputMessages);
+      return {
+        stepName,
+        outputKey: PIPELINE_OUTPUT_KEYS[stepName],
+        output,
+        model: role.llm || null,
+        inputMessages,
+        debug: {
+          stepName,
+          outputKey: PIPELINE_OUTPUT_KEYS[stepName],
+          model: role.llm || null,
+          messageWindowLabel,
+          includeCharacterCards: Boolean(stepConfig.includeCharacterCards),
+          previousOutputsRequested: [...(stepConfig.previousOutputs || [])],
+          resolvedInputs: inputData.resolvedInputs,
+          inputMessages,
+          systemPrompt,
+        },
+      };
+    }
+    case "event": {
+      const role = runtimeState.roles.event;
+      const systemPrompt = [
+        `You are the Event LLM for a long-term interactive fiction story.`,
+        ...sharedPrelude,
+        `Event-role instructions: ${role.instructions || ""}`,
+        `Write only the updated event chain.`,
+      ].join("\n");
+
+      const output = await requestRoleCompletion(role, systemPrompt, inputMessages);
+      return {
+        stepName,
+        outputKey: PIPELINE_OUTPUT_KEYS[stepName],
+        output,
+        model: role.llm || null,
+        inputMessages,
+        debug: {
+          stepName,
+          outputKey: PIPELINE_OUTPUT_KEYS[stepName],
+          model: role.llm || null,
+          messageWindowLabel,
+          includeCharacterCards: Boolean(stepConfig.includeCharacterCards),
+          previousOutputsRequested: [...(stepConfig.previousOutputs || [])],
+          resolvedInputs: inputData.resolvedInputs,
+          inputMessages,
+          systemPrompt,
+        },
+      };
+    }
+    case "mind": {
+      const role = runtimeState.roles.mind;
+      const systemPrompt = [
+        `You are the Mind LLM for a long-term interactive fiction character roster.`,
+        ...sharedPrelude,
+        `Mind-role instructions: ${role.instructions || ""}`,
+        `The visible story history below contains authored prose and dialogue. Do not imitate that format.`,
+        `Convert the history into hidden inner state only.`,
+        `Return one markdown section per chat character in the same order they were provided.`,
+        `Use the exact format: # Character Name then ## Mental Synopsis then one paragraph.`,
+        `Write only the updated roster Mental Synopsis.`,
+      ].join("\n");
+
+      const rawOutput = await requestRoleCompletion(role, systemPrompt, inputMessages);
+      const output = await normalizeMindOutput(
+        role,
+        runtimeState.chatCharacters,
+        rawOutput,
+        getPipelineInputValue(
+          "mindOutput",
+          runtimeState.currentOutputs,
+          runtimeState.previousHiddenState,
+          runtimeState.chatCharacters
+        )
+      );
+      return {
+        stepName,
+        outputKey: PIPELINE_OUTPUT_KEYS[stepName],
+        output,
+        model: role.llm || null,
+        inputMessages,
+        debug: {
+          stepName,
+          outputKey: PIPELINE_OUTPUT_KEYS[stepName],
+          model: role.llm || null,
+          messageWindowLabel,
+          includeCharacterCards: Boolean(stepConfig.includeCharacterCards),
+          previousOutputsRequested: [...(stepConfig.previousOutputs || [])],
+          resolvedInputs: inputData.resolvedInputs,
+          inputMessages,
+          systemPrompt,
+        },
+      };
+    }
+    case "goal": {
+      const role = runtimeState.roles.goal;
+      const systemPrompt = [
+        `You are the Mid-Term Goal LLM for a long-term interactive fiction character roster.`,
+        ...sharedPrelude,
+        `Goal-role instructions: ${role.instructions || ""}`,
+        `Return one markdown section per chat character in the same order they were provided.`,
+        `Use the exact format: # Character Name then ## GOALS: then exactly 3 numbered goal slots.`,
+        `Write only the updated roster mid-term goals.`,
+      ].join("\n");
+
+      const rawOutput = await requestRoleCompletion(role, systemPrompt, inputMessages);
+      const output = normalizeGoalRosterOutput(
+        runtimeState.chatCharacters,
+        rawOutput,
+        getPipelineInputValue(
+          "goalOutput",
+          runtimeState.currentOutputs,
+          runtimeState.previousHiddenState,
+          runtimeState.chatCharacters
+        )
+      );
+      return {
+        stepName,
+        outputKey: PIPELINE_OUTPUT_KEYS[stepName],
+        output,
+        model: role.llm || null,
+        inputMessages,
+        debug: {
+          stepName,
+          outputKey: PIPELINE_OUTPUT_KEYS[stepName],
+          model: role.llm || null,
+          messageWindowLabel,
+          includeCharacterCards: Boolean(stepConfig.includeCharacterCards),
+          previousOutputsRequested: [...(stepConfig.previousOutputs || [])],
+          resolvedInputs: inputData.resolvedInputs,
+          inputMessages,
+          systemPrompt,
+        },
+      };
+    }
+    case "stat": {
+      const role = runtimeState.roles.stat;
+      const systemPrompt = [
+        `You are the Stat LLM for a long-term interactive fiction character roster.`,
+        ...sharedPrelude,
+        `Stat-role instructions: ${role.instructions || ""}`,
+        `Return one markdown section per chat character in the same order they were provided.`,
+        `Use the exact format: # Character Name then ## Relationship Stats then AFFECTION/TRUST/COMFORT lines.`,
+        `Write only the updated roster relationship stats.`,
+      ].join("\n");
+
+      const rawOutput = await requestRoleCompletion(role, systemPrompt, inputMessages);
+      const output = normalizeRelationshipStatsRosterOutput(
+        runtimeState.chatCharacters,
+        rawOutput,
+        getPipelineInputValue(
+          "statOutput",
+          runtimeState.currentOutputs,
+          runtimeState.previousHiddenState,
+          runtimeState.chatCharacters
+        )
+      );
+      return {
+        stepName,
+        outputKey: PIPELINE_OUTPUT_KEYS[stepName],
+        output,
+        model: role.llm || null,
+        inputMessages,
+        debug: {
+          stepName,
+          outputKey: PIPELINE_OUTPUT_KEYS[stepName],
+          model: role.llm || null,
+          messageWindowLabel,
+          includeCharacterCards: Boolean(stepConfig.includeCharacterCards),
+          previousOutputsRequested: [...(stepConfig.previousOutputs || [])],
+          resolvedInputs: inputData.resolvedInputs,
+          inputMessages,
+          systemPrompt,
+        },
+      };
+    }
+    case "author": {
+      const role = runtimeState.roles.author;
+      const authorModel = role.llm || OPENROUTER_AUTHOR_MODEL;
+      const systemPrompt = [
+        `You are the author model for a roleplay chat interface.`,
+        `Write only the next in-character assistant reply for ${
+          runtimeState.character.nickname || runtimeState.character.name
+        }.`,
+        ...sharedPrelude,
+        `Author-role instructions: ${role.instructions || ""}`,
+        `Stay in character, be conversational, and continue naturally from the conversation history.`,
+      ].join("\n");
+
+      const output = await requestRoleCompletion(
+        {
+          ...role,
+          llm: authorModel,
+          temperature: role.temperature || 0.9,
+          topP: role.topP || 0.95,
+          maxTokens: role.maxTokens || 700,
+        },
+        systemPrompt,
+        inputMessages
+      );
+      return {
+        stepName,
+        outputKey: PIPELINE_OUTPUT_KEYS[stepName],
+        output,
+        model: authorModel,
+        inputMessages,
+        debug: {
+          stepName,
+          outputKey: PIPELINE_OUTPUT_KEYS[stepName],
+          model: authorModel,
+          messageWindowLabel,
+          includeCharacterCards: Boolean(stepConfig.includeCharacterCards),
+          previousOutputsRequested: [...(stepConfig.previousOutputs || [])],
+          resolvedInputs: inputData.resolvedInputs,
+          inputMessages,
+          systemPrompt,
+        },
+      };
+    }
+    default:
+      throw new Error(`Unsupported pipeline step "${stepName}".`);
+  }
+}
+
 async function readRequestBody(request) {
   const chunks = [];
   for await (const chunk of request) {
@@ -753,6 +1346,7 @@ async function readRequestBody(request) {
 async function ensureDirectories() {
   await fs.mkdir(CHARACTER_DIR, { recursive: true });
   await fs.mkdir(CHAT_DIR, { recursive: true });
+  await fs.mkdir(PIPELINE_DEBUG_DIR, { recursive: true });
   await fs.mkdir(LOADOUT_DIR, { recursive: true });
 }
 
@@ -1017,7 +1611,18 @@ async function saveChatMessage(chatFileName, content) {
   }
 
   const draftMessages = [...(chat.messages || []), userMessage];
+  const runStartedAt = new Date().toISOString();
   const pipelineTrace = [];
+  const pipelineDebugRun = {
+    startedAt: runStartedAt,
+    status: "running",
+    chatId: chat.id,
+    chatFileName: chat.fileName || chatFileName,
+    loadoutName: loadout?.name || "Model Loadout 1",
+    pipelineOrder: [],
+    steps: [],
+    errorMessage: "",
+  };
   const traceStep = (step, model, extra = {}) => {
     pipelineTrace.push({
       step,
@@ -1034,23 +1639,31 @@ async function saveChatMessage(chatFileName, content) {
   const goalRole = loadout?.roles?.goal || defaultLoadouts[0].roles.goal;
   const statRole = loadout?.roles?.stat || defaultLoadouts[0].roles.stat;
   const authorRole = loadout?.roles?.author || defaultLoadouts[0].roles.author;
-  const previousContinuityNotes = chat.hiddenState?.continuityNotes?.content || "";
-  const previousEventChain = chat.hiddenState?.eventChain?.content || "";
-  const previousMentalSynopsis = chat.hiddenState?.mentalSynopsis?.content || "";
-  const previousMidTermGoals = chat.hiddenState?.midTermGoals?.content || "";
-  const previousRelationshipStats =
-    chat.hiddenState?.relationshipStats?.content ||
-    buildDefaultRelationshipStatsForCharacters(chatCharacters);
-  const sceneContext = chat.hiddenState?.sceneContext?.content || "No scene context is available yet.";
-  const recentVisibleMessages = draftMessages;
-  const earliestVisibleExchange = draftMessages.slice(0, Math.min(2, draftMessages.length));
-  const recentEventMessages = draftMessages;
-  const recentMindMessages = draftMessages.slice(-20);
-  const recentGoalMessages = draftMessages.slice(-5);
-  const recentStatMessages = draftMessages.slice(-5);
+  const pipeline = sanitizePipeline(loadout?.pipeline);
   const nextTitle =
     chat.title === "New Chat" ? summarizeTitle(userMessage.content) : chat.title;
   const characterRosterPrompt = formatCharactersForPrompt(chatCharacters);
+  const previousHiddenState = {
+    continuityOutput: chat.hiddenState?.continuityNotes?.content || "",
+    eventOutput: chat.hiddenState?.eventChain?.content || "",
+    mindOutput: chat.hiddenState?.mentalSynopsis?.content || "",
+    goalOutput: chat.hiddenState?.midTermGoals?.content || "",
+    statOutput:
+      chat.hiddenState?.relationshipStats?.content ||
+      buildDefaultRelationshipStatsForCharacters(chatCharacters),
+    authorOutput: chat.hiddenState?.authorScene?.content || "",
+  };
+  const currentOutputs = {};
+  const currentModels = {};
+  const roles = {
+    continuity: continuityRole,
+    event: eventRole,
+    mind: mindRole,
+    goal: goalRole,
+    stat: statRole,
+    author: authorRole,
+  };
+  pipelineDebugRun.pipelineOrder = [...pipeline.order];
 
   traceStep("user_message_added", null, {
     messageId: userMessage.id,
@@ -1071,231 +1684,106 @@ async function saveChatMessage(chatFileName, content) {
     messages: draftMessages,
   });
 
-  const continuitySystemPrompt = [
-    `You are the Continuity LLM for a long-term interactive fiction story.`,
-    `Character name: ${character.name}`,
-    `Nickname in chat: ${character.nickname || character.name}`,
-    `Primary responding character: ${character.name}`,
-    `Chat characters:\n${characterRosterPrompt}`,
-    `Current continuity notes: ${previousContinuityNotes || "None yet."}`,
-    `You must examine only the earliest visible exchange provided below.`,
-    `Continuity-role instructions: ${continuityRole.instructions || ""}`,
-    `Write only the updated continuity notes.`,
-  ].join("\n");
+  if (!pipeline.order.includes("author")) {
+    throw new Error('Loadout pipeline must include "author".');
+  }
 
-  const continuityOutput = await requestRoleCompletion(
-    continuityRole,
-    continuitySystemPrompt,
-    earliestVisibleExchange.length > 0
-      ? earliestVisibleExchange
-      : [{ role: "user", content: "" }]
-  );
+  try {
+    for (const stepName of pipeline.order) {
+      const result = await executePipelineStep(stepName, {
+        character,
+        chatCharacters,
+        draftMessages,
+        characterRosterPrompt,
+        previousHiddenState,
+        currentOutputs,
+        roles,
+        pipeline,
+      });
 
-  traceStep("continuity_completed", continuityRole.llm || null, {
-    inputMessages: earliestVisibleExchange.length || 1,
-  });
+      currentOutputs[result.outputKey] = result.output;
+      currentModels[result.outputKey] = result.model;
+      pipelineDebugRun.steps.push(result.debug);
 
-  const eventSystemPrompt = [
-    `You are the Event LLM for a long-term interactive fiction story.`,
-    `Character name: ${character.name}`,
-    `Nickname in chat: ${character.nickname || character.name}`,
-    `Primary responding character: ${character.name}`,
-    `Chat characters:\n${characterRosterPrompt}`,
-    `Current event chain: ${previousEventChain || "None yet."}`,
-    `Current scene context: ${sceneContext}`,
-    `Event-role instructions: ${eventRole.instructions || ""}`,
-    `Write only the updated event chain.`,
-  ].join("\n");
+      traceStep(PIPELINE_TRACE_LABELS[stepName] || `${stepName}_completed`, result.model, {
+        inputMessages: result.inputMessages.length,
+      });
+    }
 
-  const eventOutput = await requestRoleCompletion(
-    eventRole,
-    eventSystemPrompt,
-    recentEventMessages
-  );
+    const assistantText = currentOutputs.authorOutput;
 
-  traceStep("event_completed", eventRole.llm || null, {
-    inputMessages: recentEventMessages.length,
-  });
+    const assistantMessage = {
+      id: makeId("msg"),
+      role: "assistant",
+      content: assistantText,
+      createdAt: new Date().toISOString(),
+    };
 
-  const mindSystemPrompt = [
-    `You are the Mind LLM for a long-term interactive fiction character roster.`,
-    `Primary responding character: ${character.name}`,
-    `Chat characters:\n${characterRosterPrompt}`,
-    `Previous Mental Synopsis:\n${previousMentalSynopsis || "None yet."}`,
-    `Current scene context: ${sceneContext}`,
-    `Mind-role instructions: ${mindRole.instructions || ""}`,
-    `The visible story history below contains authored prose and dialogue. Do not imitate that format.`,
-    `Convert the history into hidden inner state only.`,
-    `Return one markdown section per chat character in the same order they were provided.`,
-    `Use the exact format: # Character Name then ## Mental Synopsis then one paragraph.`,
-    `Write only the updated roster Mental Synopsis.`,
-  ].join("\n");
+    traceStep("author_message_added", null, {
+      messageId: assistantMessage.id,
+      visibleMessageCount: draftMessages.length + 1,
+    });
 
-  const rawMindOutput = await requestRoleCompletion(
-    mindRole,
-    mindSystemPrompt,
-    recentMindMessages
-  );
-  const mindOutput = await normalizeMindOutput(
-    mindRole,
-    chatCharacters,
-    rawMindOutput,
-    previousMentalSynopsis
-  );
+    pipelineDebugRun.status = "completed";
 
-  traceStep("mind_completed", mindRole.llm || null, {
-    inputMessages: recentMindMessages.length,
-  });
-
-  const goalSystemPrompt = [
-    `You are the Mid-Term Goal LLM for a long-term interactive fiction character roster.`,
-    `Primary responding character: ${character.name}`,
-    `Chat characters:\n${characterRosterPrompt}`,
-    `Previous mid-term goals:\n${previousMidTermGoals || "None yet."}`,
-    `Updated Mental Synopsis:\n${mindOutput}`,
-    `Latest user input: ${userMessage.content}`,
-    `Current scene context: ${sceneContext}`,
-    `Goal-role instructions: ${goalRole.instructions || ""}`,
-    `Return one markdown section per chat character in the same order they were provided.`,
-    `Use the exact format: # Character Name then ## GOALS: then exactly 3 numbered goal slots.`,
-    `Write only the updated roster mid-term goals.`,
-  ].join("\n");
-
-  const goalOutput = await requestRoleCompletion(
-    goalRole,
-    goalSystemPrompt,
-    recentGoalMessages
-  );
-  const normalizedGoalOutput = normalizeGoalRosterOutput(
-    chatCharacters,
-    goalOutput,
-    previousMidTermGoals
-  );
-
-  traceStep("mid_term_goal_completed", goalRole.llm || null, {
-    inputMessages: recentGoalMessages.length,
-  });
-
-  const statSystemPrompt = [
-    `You are the Stat LLM for a long-term interactive fiction character roster.`,
-    `Primary responding character: ${character.name}`,
-    `Chat characters:\n${characterRosterPrompt}`,
-    `Current relationship stats:\n${previousRelationshipStats}`,
-    `Updated Mental Synopsis:\n${mindOutput}`,
-    `Updated Mid-Term Goals:\n${normalizedGoalOutput}`,
-    `Latest user input: ${userMessage.content}`,
-    `Current scene context: ${sceneContext}`,
-    `Stat-role instructions: ${statRole.instructions || ""}`,
-    `Return one markdown section per chat character in the same order they were provided.`,
-    `Use the exact format: # Character Name then ## Relationship Stats then AFFECTION/TRUST/COMFORT lines.`,
-    `Write only the updated roster relationship stats.`,
-  ].join("\n");
-
-  const rawStatOutput = await requestRoleCompletion(
-    statRole,
-    statSystemPrompt,
-    recentStatMessages
-  );
-  const statOutput = normalizeRelationshipStatsRosterOutput(
-    chatCharacters,
-    rawStatOutput,
-    previousRelationshipStats
-  );
-
-  traceStep("stat_completed", statRole.llm || null, {
-    inputMessages: recentStatMessages.length,
-  });
-
-  const systemPrompt = [
-    `You are the author model for a roleplay chat interface.`,
-    `Write only the next in-character assistant reply for ${character.nickname || character.name}.`,
-    `Character name: ${character.name}`,
-    `Nickname in chat: ${character.nickname || character.name}`,
-    `Primary responding character: ${character.name}`,
-    `Chat characters:\n${characterRosterPrompt}`,
-    `Mental Synopsis by character:\n${mindOutput}`,
-    `Mid-Term Goals by character:\n${normalizedGoalOutput}`,
-    `Continuity Notes: ${continuityOutput}`,
-    `Relationship Stats by character:\n${statOutput}`,
-    `Event Chain: ${eventOutput}`,
-    `Current scene context: ${sceneContext}`,
-    `Example dialogue:`,
-    character.dialogue || "No example dialogue provided.",
-    `Author-role instructions: ${authorRole.instructions || ""}`,
-    `Stay in character, be conversational, and continue naturally from the conversation history.`,
-  ].join("\n");
-
-  const assistantText = await requestRoleCompletion(
-    {
-      ...authorRole,
-      llm: authorRole.llm || OPENROUTER_AUTHOR_MODEL,
-      temperature: authorRole.temperature || 0.9,
-      topP: authorRole.topP || 0.95,
-      maxTokens: authorRole.maxTokens || 700,
-    },
-    systemPrompt,
-    draftMessages
-  );
-
-  traceStep("author_completed", authorRole.llm || OPENROUTER_AUTHOR_MODEL, {
-    inputMessages: recentVisibleMessages.length,
-  });
-
-  const assistantMessage = {
-    id: makeId("msg"),
-    role: "assistant",
-    content: assistantText,
-    createdAt: new Date().toISOString(),
-  };
-
-  traceStep("author_message_added", null, {
-    messageId: assistantMessage.id,
-    visibleMessageCount: draftMessages.length + 1,
-  });
-
-  return saveChat({
-    ...chat,
-    title: nextTitle,
-    characterName: character.name,
-    updatedAt: new Date().toISOString(),
-    hiddenState: {
-      ...(chat.hiddenState || {}),
-      mentalSynopsis: {
-        content: mindOutput,
-        updatedAt: new Date().toISOString(),
-        model: mindRole.llm || "",
+    return saveChat({
+      ...chat,
+      title: nextTitle,
+      characterName: character.name,
+      updatedAt: new Date().toISOString(),
+      hiddenState: {
+        ...(chat.hiddenState || {}),
+        mentalSynopsis: {
+          content: currentOutputs.mindOutput || previousHiddenState.mindOutput,
+          updatedAt: new Date().toISOString(),
+          model: currentModels.mindOutput || mindRole.llm || "",
+        },
+        continuityNotes: {
+          content: currentOutputs.continuityOutput || previousHiddenState.continuityOutput,
+          updatedAt: new Date().toISOString(),
+          model: currentModels.continuityOutput || continuityRole.llm || "",
+        },
+        eventChain: {
+          content: currentOutputs.eventOutput || previousHiddenState.eventOutput,
+          updatedAt: new Date().toISOString(),
+          model: currentModels.eventOutput || eventRole.llm || "",
+        },
+        midTermGoals: {
+          content: currentOutputs.goalOutput || previousHiddenState.goalOutput,
+          updatedAt: new Date().toISOString(),
+          model: currentModels.goalOutput || goalRole.llm || "",
+        },
+        relationshipStats: {
+          content: currentOutputs.statOutput || previousHiddenState.statOutput,
+          updatedAt: new Date().toISOString(),
+          model: currentModels.statOutput || statRole.llm || "",
+        },
+        authorScene: {
+          content: assistantText,
+          updatedAt: new Date().toISOString(),
+          model: currentModels.authorOutput || authorRole.llm || OPENROUTER_AUTHOR_MODEL,
+        },
+        pipelineTrace: {
+          lastRun: pipelineTrace,
+        },
       },
-      continuityNotes: {
-        content: continuityOutput,
-        updatedAt: new Date().toISOString(),
-        model: continuityRole.llm || "",
-      },
-      eventChain: {
-        content: eventOutput,
-        updatedAt: new Date().toISOString(),
-        model: eventRole.llm || "",
-      },
-      midTermGoals: {
-        content: normalizedGoalOutput,
-        updatedAt: new Date().toISOString(),
-        model: goalRole.llm || "",
-      },
-      relationshipStats: {
-        content: statOutput,
-        updatedAt: new Date().toISOString(),
-        model: statRole.llm || "",
-      },
-      authorScene: {
-        content: assistantText,
-        updatedAt: new Date().toISOString(),
-        model: authorRole.llm || OPENROUTER_AUTHOR_MODEL,
-      },
-      pipelineTrace: {
-        lastRun: pipelineTrace,
-      },
-    },
-    messages: [...draftMessages, assistantMessage],
-  });
+      messages: [...draftMessages, assistantMessage],
+    });
+  } catch (error) {
+    pipelineDebugRun.status = "failed";
+    pipelineDebugRun.errorMessage =
+      error instanceof Error ? error.message : "Unknown pipeline error.";
+    throw error;
+  } finally {
+    try {
+      await writePipelineDebugFile(pipelineDebugRun);
+    } catch (debugError) {
+      console.error(
+        "Failed to write pipeline debug file:",
+        debugError instanceof Error ? debugError.message : debugError
+      );
+    }
+  }
 }
 
 const server = http.createServer(async (request, response) => {
@@ -1417,5 +1905,6 @@ server.listen(PORT, HOST, async () => {
   console.log(`Character directory: ${CHARACTER_DIR}`);
   console.log(`Loadout directory: ${LOADOUT_DIR}`);
   console.log(`Chat directory: ${CHAT_DIR}`);
+  console.log(`Pipeline debug directory: ${PIPELINE_DEBUG_DIR}`);
   console.log(`Author model: ${OPENROUTER_AUTHOR_MODEL}`);
 });
