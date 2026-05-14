@@ -8,6 +8,7 @@ const PORT = 4317;
 const CHARACTER_DIR = path.join(__dirname, "character-library");
 const CHAT_DIR = path.join(__dirname, "chat-library");
 const PIPELINE_DEBUG_DIR = path.join(CHAT_DIR, "pipeline-debug");
+const EVENT_CHAIN_DUMP_PATH = path.join(CHAT_DIR, "latest-event-chain.txt");
 const LOADOUT_DIR = path.join(__dirname, "loadout-library");
 const ENV_PATH = path.join(__dirname, ".env");
 
@@ -42,6 +43,18 @@ loadDotEnv(ENV_PATH);
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "";
 const OPENROUTER_AUTHOR_MODEL =
   process.env.OPENROUTER_AUTHOR_MODEL || "deepseek/deepseek-chat-v3.1";
+const OPENROUTER_REQUEST_TIMEOUT_MS = Math.max(
+  1000,
+  Number(process.env.OPENROUTER_REQUEST_TIMEOUT_MS) || 120000
+);
+const EDIT_REGEN_REPLAY_TIMEOUT_MS = Math.max(
+  1000,
+  Number(process.env.EDIT_REGEN_REPLAY_TIMEOUT_MS) || 15000
+);
+const EDIT_REGEN_REPLAY_USER_TURN_LIMIT = Math.max(
+  1,
+  Number(process.env.EDIT_REGEN_REPLAY_USER_TURN_LIMIT) || 8
+);
 
 const PIPELINE_STEP_KEYS = ["continuity", "event", "mind", "goal", "stat", "author"];
 
@@ -132,8 +145,32 @@ const PIPELINE_TRACE_LABELS = {
   author: "author_completed",
 };
 
+const pendingRegenerationJobs = new Map();
+
 function createDefaultPipelineConfig() {
   return JSON.parse(JSON.stringify(DEFAULT_PIPELINE_CONFIG));
+}
+
+function isPendingAssistantMessage(message) {
+  return message?.role === "assistant" && message?.pending === true;
+}
+
+function stripPendingAssistantMessages(messages) {
+  if (!Array.isArray(messages)) {
+    return [];
+  }
+
+  return messages.filter((message) => !isPendingAssistantMessage(message));
+}
+
+function hasPendingRegenerationJobForChat(chatFileName) {
+  return Array.from(pendingRegenerationJobs.keys()).some((jobKey) =>
+    jobKey.startsWith(`${chatFileName}:`)
+  );
+}
+
+function isLatestPendingRegeneration(jobKey, requestId) {
+  return pendingRegenerationJobs.get(jobKey)?.requestId === requestId;
 }
 
 const DEFAULT_MULTI_CHARACTER_MIND_INSTRUCTIONS = `# Mind LLM System Instructions
@@ -612,13 +649,20 @@ function extractAssistantText(messageContent) {
 }
 
 function buildRoleRequestMessages(systemPrompt, conversationMessages) {
-  return [
-    { role: "system", content: systemPrompt },
+  const messages = [];
+  const normalizedSystemPrompt = String(systemPrompt || "").trim();
+  if (normalizedSystemPrompt) {
+    messages.push({ role: "system", content: normalizedSystemPrompt });
+  }
+
+  messages.push(
     ...conversationMessages.map((message) => ({
       role: message.role,
       content: message.content,
-    })),
-  ];
+    }))
+  );
+
+  return messages;
 }
 
 function formatIsoTimestampForFile(value) {
@@ -711,24 +755,53 @@ async function writePipelineDebugFile(debugRun) {
   );
 }
 
-async function requestRoleCompletion(roleConfig, systemPrompt, conversationMessages) {
-  const openRouterResponse = await fetch(
-    "https://openrouter.ai/api/v1/chat/completions",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: roleConfig.llm,
-        temperature: Number(roleConfig.temperature || 1),
-        top_p: Number(roleConfig.topP || 1),
-        max_tokens: Number(roleConfig.maxTokens || 1024),
-        messages: buildRoleRequestMessages(systemPrompt, conversationMessages),
-      }),
-    }
+async function writeLatestEventChainFile(eventChainText) {
+  await ensureDirectories();
+  await fs.appendFile(
+    EVENT_CHAIN_DUMP_PATH,
+    `${String(eventChainText || "").trim()}\n\n`,
+    "utf8"
   );
+}
+
+async function requestRoleCompletion(roleConfig, systemPrompt, conversationMessages) {
+  const abortController = new AbortController();
+  const timeoutHandle = setTimeout(() => {
+    abortController.abort(
+      new Error(`OpenRouter request timed out after ${OPENROUTER_REQUEST_TIMEOUT_MS}ms.`)
+    );
+  }, OPENROUTER_REQUEST_TIMEOUT_MS);
+
+  let openRouterResponse;
+  try {
+    openRouterResponse = await fetch(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: roleConfig.llm,
+          temperature: Number(roleConfig.temperature),
+          top_p: Number(roleConfig.topP),
+          max_tokens: Number(roleConfig.maxTokens),
+          messages: buildRoleRequestMessages(systemPrompt, conversationMessages),
+        }),
+        signal: abortController.signal,
+      }
+    );
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(
+        `OpenRouter request timed out after ${OPENROUTER_REQUEST_TIMEOUT_MS}ms.`
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
 
   if (!openRouterResponse.ok) {
     const errorPayload = await openRouterResponse.text();
@@ -831,31 +904,7 @@ function needsMindRewrite(text) {
 }
 
 async function normalizeMindParagraph(roleConfig, character, rawOutput) {
-  if (!needsMindRewrite(rawOutput)) {
-    return String(rawOutput || "").trim();
-  }
-
-  const repairPrompt = [
-    `You are repairing a hidden Mental Synopsis for an interactive fiction character.`,
-    `Character name: ${character.name}`,
-    `Nickname in chat: ${character.nickname || character.name}`,
-    `Rewrite the candidate so it becomes a true Mental Synopsis.`,
-    `The output must describe only inner emotional state, private reaction, and immediate short-term desire.`,
-    `Write exactly one paragraph in third-person present tense.`,
-    `Maximum 5 sentences.`,
-    `Do not include dialogue, quoted speech, scene narration, action beats, or visible description.`,
-    `Return only the repaired Mental Synopsis.`,
-  ].join("\n");
-
-  return requestRoleCompletion(
-    {
-      ...roleConfig,
-      temperature: 0.2,
-      maxTokens: 300,
-    },
-    repairPrompt,
-    [{ role: "user", content: String(rawOutput || "") }]
-  );
+  return String(rawOutput || "").trim();
 }
 
 async function normalizeMindOutput(roleConfig, characters, rawOutput, previousOutput = "") {
@@ -995,16 +1044,9 @@ function resolvePipelineInput(outputKey, currentOutputs, previousHiddenState, ch
     };
   }
 
-  if (outputKey === "statOutput") {
-    return {
-      value: buildDefaultRelationshipStatsForCharacters(characters),
-      source: "default fallback",
-    };
-  }
-
   return {
-    value: "None yet.",
-    source: "default fallback",
+    value: "",
+    source: "missing",
   };
 }
 
@@ -1028,6 +1070,9 @@ function buildPipelineInputData(stepName, stepConfig, runtimeState) {
       runtimeState.previousHiddenState,
       runtimeState.chatCharacters
     );
+    if (!String(resolved.value || "").trim()) {
+      return;
+    }
     sections.push(`${label}:\n${resolved.value}`);
     resolvedInputs.push({
       outputKey,
@@ -1036,12 +1081,6 @@ function buildPipelineInputData(stepName, stepConfig, runtimeState) {
       source: resolved.source,
     });
   });
-
-  if (stepName === "author") {
-    sections.push(
-      `Example dialogue:\n${runtimeState.character.dialogue || "No example dialogue provided."}`
-    );
-  }
 
   return {
     sections,
@@ -1061,10 +1100,6 @@ function getPipelineMessages(stepName, messageWindow, draftMessages) {
   }
 
   const count = Math.max(1, Math.floor(normalizedWindow));
-  if (stepName === "continuity") {
-    return messages.slice(0, Math.min(count, messages.length));
-  }
-
   if (count >= messages.length) {
     return messages;
   }
@@ -1085,40 +1120,28 @@ async function executePipelineStep(stepName, runtimeState) {
     stepConfig.messageWindow,
     runtimeState.draftMessages
   );
-  const sharedPrelude = [
-    `Character name: ${runtimeState.character.name}`,
-    `Nickname in chat: ${runtimeState.character.nickname || runtimeState.character.name}`,
-    `Primary responding character: ${runtimeState.character.name}`,
-    ...inputSections,
-  ];
+  const requestMessages = inputSections.length
+    ? [{ role: "user", content: inputSections.join("\n\n") }, ...inputMessages]
+    : inputMessages;
   const normalizedWindow = Number(stepConfig.messageWindow);
   const windowCount = Math.max(1, Math.floor(normalizedWindow || 1));
   const messageWindowLabel = !Number.isFinite(normalizedWindow) || normalizedWindow <= 0
     ? "all visible messages (invalid or disabled window)"
-    : stepName === "continuity"
-      ? `earliest ${Math.min(windowCount, runtimeState.draftMessages.length)} visible messages`
-      : windowCount >= runtimeState.draftMessages.length
-        ? "all visible messages"
-        : `latest ${windowCount} visible messages`;
+    : windowCount >= runtimeState.draftMessages.length
+      ? "all visible messages"
+      : `latest ${windowCount} visible messages`;
 
   switch (stepName) {
     case "continuity": {
       const role = runtimeState.roles.continuity;
-      const systemPrompt = [
-        `You are the Continuity LLM for a long-term interactive fiction story.`,
-        ...sharedPrelude,
-        `You must examine only the earliest visible exchange provided below.`,
-        `Continuity-role instructions: ${role.instructions || ""}`,
-        `Write only the updated continuity notes.`,
-      ].join("\n");
-
-      const output = await requestRoleCompletion(role, systemPrompt, inputMessages);
+      const systemPrompt = role.instructions || "";
+      const output = await requestRoleCompletion(role, systemPrompt, requestMessages);
       return {
         stepName,
         outputKey: PIPELINE_OUTPUT_KEYS[stepName],
         output,
         model: role.llm || null,
-        inputMessages,
+        inputMessages: requestMessages,
         debug: {
           stepName,
           outputKey: PIPELINE_OUTPUT_KEYS[stepName],
@@ -1127,27 +1150,21 @@ async function executePipelineStep(stepName, runtimeState) {
           includeCharacterCards: Boolean(stepConfig.includeCharacterCards),
           previousOutputsRequested: [...(stepConfig.previousOutputs || [])],
           resolvedInputs: inputData.resolvedInputs,
-          inputMessages,
+          inputMessages: requestMessages,
           systemPrompt,
         },
       };
     }
     case "event": {
       const role = runtimeState.roles.event;
-      const systemPrompt = [
-        `You are the Event LLM for a long-term interactive fiction story.`,
-        ...sharedPrelude,
-        `Event-role instructions: ${role.instructions || ""}`,
-        `Write only the updated event chain.`,
-      ].join("\n");
-
-      const output = await requestRoleCompletion(role, systemPrompt, inputMessages);
+      const systemPrompt = role.instructions || "";
+      const output = await requestRoleCompletion(role, systemPrompt, requestMessages);
       return {
         stepName,
         outputKey: PIPELINE_OUTPUT_KEYS[stepName],
         output,
         model: role.llm || null,
-        inputMessages,
+        inputMessages: requestMessages,
         debug: {
           stepName,
           outputKey: PIPELINE_OUTPUT_KEYS[stepName],
@@ -1156,25 +1173,15 @@ async function executePipelineStep(stepName, runtimeState) {
           includeCharacterCards: Boolean(stepConfig.includeCharacterCards),
           previousOutputsRequested: [...(stepConfig.previousOutputs || [])],
           resolvedInputs: inputData.resolvedInputs,
-          inputMessages,
+          inputMessages: requestMessages,
           systemPrompt,
         },
       };
     }
     case "mind": {
       const role = runtimeState.roles.mind;
-      const systemPrompt = [
-        `You are the Mind LLM for a long-term interactive fiction character roster.`,
-        ...sharedPrelude,
-        `Mind-role instructions: ${role.instructions || ""}`,
-        `The visible story history below contains authored prose and dialogue. Do not imitate that format.`,
-        `Convert the history into hidden inner state only.`,
-        `Return one markdown section per chat character in the same order they were provided.`,
-        `Use the exact format: # Character Name then ## Mental Synopsis then one paragraph.`,
-        `Write only the updated roster Mental Synopsis.`,
-      ].join("\n");
-
-      const rawOutput = await requestRoleCompletion(role, systemPrompt, inputMessages);
+      const systemPrompt = role.instructions || "";
+      const rawOutput = await requestRoleCompletion(role, systemPrompt, requestMessages);
       const output = await normalizeMindOutput(
         role,
         runtimeState.chatCharacters,
@@ -1191,7 +1198,7 @@ async function executePipelineStep(stepName, runtimeState) {
         outputKey: PIPELINE_OUTPUT_KEYS[stepName],
         output,
         model: role.llm || null,
-        inputMessages,
+        inputMessages: requestMessages,
         debug: {
           stepName,
           outputKey: PIPELINE_OUTPUT_KEYS[stepName],
@@ -1200,23 +1207,15 @@ async function executePipelineStep(stepName, runtimeState) {
           includeCharacterCards: Boolean(stepConfig.includeCharacterCards),
           previousOutputsRequested: [...(stepConfig.previousOutputs || [])],
           resolvedInputs: inputData.resolvedInputs,
-          inputMessages,
+          inputMessages: requestMessages,
           systemPrompt,
         },
       };
     }
     case "goal": {
       const role = runtimeState.roles.goal;
-      const systemPrompt = [
-        `You are the Mid-Term Goal LLM for a long-term interactive fiction character roster.`,
-        ...sharedPrelude,
-        `Goal-role instructions: ${role.instructions || ""}`,
-        `Return one markdown section per chat character in the same order they were provided.`,
-        `Use the exact format: # Character Name then ## GOALS: then exactly 3 numbered goal slots.`,
-        `Write only the updated roster mid-term goals.`,
-      ].join("\n");
-
-      const rawOutput = await requestRoleCompletion(role, systemPrompt, inputMessages);
+      const systemPrompt = role.instructions || "";
+      const rawOutput = await requestRoleCompletion(role, systemPrompt, requestMessages);
       const output = normalizeGoalRosterOutput(
         runtimeState.chatCharacters,
         rawOutput,
@@ -1232,7 +1231,7 @@ async function executePipelineStep(stepName, runtimeState) {
         outputKey: PIPELINE_OUTPUT_KEYS[stepName],
         output,
         model: role.llm || null,
-        inputMessages,
+        inputMessages: requestMessages,
         debug: {
           stepName,
           outputKey: PIPELINE_OUTPUT_KEYS[stepName],
@@ -1241,23 +1240,15 @@ async function executePipelineStep(stepName, runtimeState) {
           includeCharacterCards: Boolean(stepConfig.includeCharacterCards),
           previousOutputsRequested: [...(stepConfig.previousOutputs || [])],
           resolvedInputs: inputData.resolvedInputs,
-          inputMessages,
+          inputMessages: requestMessages,
           systemPrompt,
         },
       };
     }
     case "stat": {
       const role = runtimeState.roles.stat;
-      const systemPrompt = [
-        `You are the Stat LLM for a long-term interactive fiction character roster.`,
-        ...sharedPrelude,
-        `Stat-role instructions: ${role.instructions || ""}`,
-        `Return one markdown section per chat character in the same order they were provided.`,
-        `Use the exact format: # Character Name then ## Relationship Stats then AFFECTION/TRUST/COMFORT lines.`,
-        `Write only the updated roster relationship stats.`,
-      ].join("\n");
-
-      const rawOutput = await requestRoleCompletion(role, systemPrompt, inputMessages);
+      const systemPrompt = role.instructions || "";
+      const rawOutput = await requestRoleCompletion(role, systemPrompt, requestMessages);
       const output = normalizeRelationshipStatsRosterOutput(
         runtimeState.chatCharacters,
         rawOutput,
@@ -1273,7 +1264,7 @@ async function executePipelineStep(stepName, runtimeState) {
         outputKey: PIPELINE_OUTPUT_KEYS[stepName],
         output,
         model: role.llm || null,
-        inputMessages,
+        inputMessages: requestMessages,
         debug: {
           stepName,
           outputKey: PIPELINE_OUTPUT_KEYS[stepName],
@@ -1282,41 +1273,30 @@ async function executePipelineStep(stepName, runtimeState) {
           includeCharacterCards: Boolean(stepConfig.includeCharacterCards),
           previousOutputsRequested: [...(stepConfig.previousOutputs || [])],
           resolvedInputs: inputData.resolvedInputs,
-          inputMessages,
+          inputMessages: requestMessages,
           systemPrompt,
         },
       };
     }
     case "author": {
       const role = runtimeState.roles.author;
-      const authorModel = role.llm || OPENROUTER_AUTHOR_MODEL;
-      const systemPrompt = [
-        `You are the author model for a roleplay chat interface.`,
-        `Write only the next in-character assistant reply for ${
-          runtimeState.character.nickname || runtimeState.character.name
-        }.`,
-        ...sharedPrelude,
-        `Author-role instructions: ${role.instructions || ""}`,
-        `Stay in character, be conversational, and continue naturally from the conversation history.`,
-      ].join("\n");
+      const authorModel = role.llm;
+      const systemPrompt = role.instructions || "";
 
       const output = await requestRoleCompletion(
         {
           ...role,
           llm: authorModel,
-          temperature: role.temperature || 0.9,
-          topP: role.topP || 0.95,
-          maxTokens: role.maxTokens || 700,
         },
         systemPrompt,
-        inputMessages
+        requestMessages
       );
       return {
         stepName,
         outputKey: PIPELINE_OUTPUT_KEYS[stepName],
         output,
         model: authorModel,
-        inputMessages,
+        inputMessages: requestMessages,
         debug: {
           stepName,
           outputKey: PIPELINE_OUTPUT_KEYS[stepName],
@@ -1325,7 +1305,7 @@ async function executePipelineStep(stepName, runtimeState) {
           includeCharacterCards: Boolean(stepConfig.includeCharacterCards),
           previousOutputsRequested: [...(stepConfig.previousOutputs || [])],
           resolvedInputs: inputData.resolvedInputs,
-          inputMessages,
+          inputMessages: requestMessages,
           systemPrompt,
         },
       };
@@ -1511,10 +1491,16 @@ async function loadChats() {
 
 async function loadChat(fileName) {
   const raw = await fs.readFile(path.join(CHAT_DIR, fileName), "utf8");
-  return normalizeChat({
+  const chat = normalizeChat({
     ...JSON.parse(raw),
     fileName,
   });
+
+  if (!hasPendingRegenerationJobForChat(fileName)) {
+    chat.messages = stripPendingAssistantMessages(chat.messages);
+  }
+
+  return chat;
 }
 
 async function saveChat(chat) {
@@ -1584,8 +1570,328 @@ async function createChat(characterId, loadoutId) {
   return chat;
 }
 
+function createEmptyHiddenStateOutputs(chatCharacters) {
+  return {
+    continuityOutput: "",
+    eventOutput: "",
+    mindOutput: "",
+    goalOutput: "",
+    statOutput: buildDefaultRelationshipStatsForCharacters(chatCharacters),
+    authorOutput: "",
+  };
+}
+
+function createHiddenStateOutputsFromChat(chat, chatCharacters) {
+  return {
+    continuityOutput: chat.hiddenState?.continuityNotes?.content || "",
+    eventOutput: chat.hiddenState?.eventChain?.content || "",
+    mindOutput: chat.hiddenState?.mentalSynopsis?.content || "",
+    goalOutput: chat.hiddenState?.midTermGoals?.content || "",
+    statOutput:
+      chat.hiddenState?.relationshipStats?.content ||
+      buildDefaultRelationshipStatsForCharacters(chatCharacters),
+    authorOutput: chat.hiddenState?.authorScene?.content || "",
+  };
+}
+
+function buildHiddenStatePayload(
+  existingHiddenState,
+  currentOutputs,
+  currentModels,
+  roles,
+  previousHiddenState,
+  assistantText,
+  pipelineTrace
+) {
+  return {
+    ...(existingHiddenState || {}),
+    mentalSynopsis: {
+      content: currentOutputs.mindOutput || previousHiddenState.mindOutput,
+      updatedAt: new Date().toISOString(),
+      model: currentModels.mindOutput || roles.mind.llm || "",
+    },
+    continuityNotes: {
+      content: currentOutputs.continuityOutput || previousHiddenState.continuityOutput,
+      updatedAt: new Date().toISOString(),
+      model: currentModels.continuityOutput || roles.continuity.llm || "",
+    },
+    eventChain: {
+      content: currentOutputs.eventOutput || previousHiddenState.eventOutput,
+      updatedAt: new Date().toISOString(),
+      model: currentModels.eventOutput || roles.event.llm || "",
+    },
+    midTermGoals: {
+      content: currentOutputs.goalOutput || previousHiddenState.goalOutput,
+      updatedAt: new Date().toISOString(),
+      model: currentModels.goalOutput || roles.goal.llm || "",
+    },
+    relationshipStats: {
+      content: currentOutputs.statOutput || previousHiddenState.statOutput,
+      updatedAt: new Date().toISOString(),
+      model: currentModels.statOutput || roles.stat.llm || "",
+    },
+    authorScene: {
+      content: assistantText,
+      updatedAt: new Date().toISOString(),
+      model: currentModels.authorOutput || roles.author.llm || "",
+    },
+    pipelineTrace: {
+      lastRun: pipelineTrace,
+    },
+  };
+}
+
+async function runPipelineForDraft({
+  chat,
+  chatFileName,
+  character,
+  chatCharacters,
+  loadout,
+  draftMessages,
+  previousHiddenState,
+  writeArtifacts = true,
+}) {
+  const visibleDraftMessages = stripPendingAssistantMessages(draftMessages);
+  const runStartedAt = new Date().toISOString();
+  const pipelineTrace = [];
+  const pipelineDebugRun = {
+    startedAt: runStartedAt,
+    status: "running",
+    chatId: chat.id,
+    chatFileName: chat.fileName || chatFileName,
+    loadoutName: loadout?.name || "Model Loadout 1",
+    pipelineOrder: [],
+    steps: [],
+    errorMessage: "",
+  };
+  const traceStep = (step, model, extra = {}) => {
+    pipelineTrace.push({
+      step,
+      model: model || null,
+      at: new Date().toISOString(),
+      ...extra,
+    });
+  };
+
+  const roles = {
+    continuity: loadout?.roles?.continuity || defaultLoadouts[0].roles.continuity,
+    event: loadout?.roles?.event || defaultLoadouts[0].roles.event,
+    mind: loadout?.roles?.mind || defaultLoadouts[0].roles.mind,
+    goal: loadout?.roles?.goal || defaultLoadouts[0].roles.goal,
+    stat: loadout?.roles?.stat || defaultLoadouts[0].roles.stat,
+    author: loadout?.roles?.author || defaultLoadouts[0].roles.author,
+  };
+  const pipeline = sanitizePipeline(loadout?.pipeline);
+  const characterRosterPrompt = formatCharactersForPrompt(chatCharacters);
+  const currentOutputs = {};
+  const currentModels = {};
+  const latestUserMessage = [...visibleDraftMessages].reverse().find(
+    (message) => message.role === "user"
+  );
+
+  pipelineDebugRun.pipelineOrder = [...pipeline.order];
+
+  traceStep("user_message_added", null, {
+    messageId: latestUserMessage?.id || "",
+    visibleMessageCount: visibleDraftMessages.length,
+  });
+
+  if (!pipeline.order.includes("author")) {
+    throw new Error('Loadout pipeline must include "author".');
+  }
+
+  try {
+    for (const stepName of pipeline.order) {
+      const result = await executePipelineStep(stepName, {
+        character,
+        chatCharacters,
+        draftMessages: visibleDraftMessages,
+        characterRosterPrompt,
+        previousHiddenState,
+        currentOutputs,
+        roles,
+        pipeline,
+      });
+
+      currentOutputs[result.outputKey] = result.output;
+      currentModels[result.outputKey] = result.model;
+      pipelineDebugRun.steps.push(result.debug);
+
+      if (writeArtifacts && result.outputKey === "eventOutput") {
+        await writeLatestEventChainFile(result.output);
+      }
+
+      traceStep(PIPELINE_TRACE_LABELS[result.stepName] || `${result.stepName}_completed`, result.model, {
+        inputMessages: result.inputMessages.length,
+      });
+    }
+
+    const assistantText = currentOutputs.authorOutput || "";
+    const assistantMessage = {
+      id: makeId("msg"),
+      role: "assistant",
+      content: assistantText,
+      createdAt: new Date().toISOString(),
+    };
+
+    traceStep("author_message_added", null, {
+      messageId: assistantMessage.id,
+      visibleMessageCount: visibleDraftMessages.length + 1,
+    });
+
+    pipelineDebugRun.status = "completed";
+
+    return {
+      roles,
+      pipelineTrace,
+      currentOutputs,
+      currentModels,
+      assistantText,
+      assistantMessage,
+    };
+  } catch (error) {
+    pipelineDebugRun.status = "failed";
+    pipelineDebugRun.errorMessage =
+      error instanceof Error ? error.message : "Unknown pipeline error.";
+    throw error;
+  } finally {
+    if (writeArtifacts) {
+      try {
+        await writePipelineDebugFile(pipelineDebugRun);
+      } catch (debugError) {
+        console.error(
+          "Failed to write pipeline debug file:",
+          debugError instanceof Error ? debugError.message : debugError
+        );
+      }
+    }
+  }
+}
+
+async function rebuildHiddenStateBeforeMessage(chat, messagesBeforeEdit, character, chatCharacters, loadout) {
+  let previousHiddenState = createEmptyHiddenStateOutputs(chatCharacters);
+  const replayMessages = [];
+
+  for (let index = 0; index < messagesBeforeEdit.length; index += 1) {
+    const message = messagesBeforeEdit[index];
+    replayMessages.push(message);
+
+    if (message.role !== "user") {
+      continue;
+    }
+
+    const result = await runPipelineForDraft({
+      chat,
+      chatFileName: chat.fileName,
+      character,
+      chatCharacters,
+      loadout,
+      draftMessages: [...replayMessages],
+      previousHiddenState,
+      writeArtifacts: false,
+    });
+
+    const nextAssistantMessage = messagesBeforeEdit[index + 1];
+    previousHiddenState = {
+      continuityOutput: result.currentOutputs.continuityOutput || previousHiddenState.continuityOutput,
+      eventOutput: result.currentOutputs.eventOutput || previousHiddenState.eventOutput,
+      mindOutput: result.currentOutputs.mindOutput || previousHiddenState.mindOutput,
+      goalOutput: result.currentOutputs.goalOutput || previousHiddenState.goalOutput,
+      statOutput: result.currentOutputs.statOutput || previousHiddenState.statOutput,
+      authorOutput:
+        nextAssistantMessage?.role === "assistant"
+          ? nextAssistantMessage.content
+          : result.assistantText || previousHiddenState.authorOutput,
+    };
+  }
+
+  return previousHiddenState;
+}
+
+function countUserTurns(messages) {
+  if (!Array.isArray(messages)) {
+    return 0;
+  }
+
+  return messages.reduce(
+    (count, message) => count + (message?.role === "user" ? 1 : 0),
+    0
+  );
+}
+
+function buildFastEditReplayFallback(chat, messagesBeforeEdit, chatCharacters) {
+  const fallbackState = createHiddenStateOutputsFromChat(chat, chatCharacters);
+  const previousAssistantMessage = [...messagesBeforeEdit]
+    .reverse()
+    .find((message) => message?.role === "assistant");
+
+  return {
+    ...fallbackState,
+    authorOutput: previousAssistantMessage?.content || "",
+  };
+}
+
+function withTimeout(promise, timeoutMs, label) {
+  return new Promise((resolve, reject) => {
+    const timeoutHandle = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${timeoutMs}ms.`));
+    }, timeoutMs);
+
+    promise.then(
+      (value) => {
+        clearTimeout(timeoutHandle);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timeoutHandle);
+        reject(error);
+      }
+    );
+  });
+}
+
+async function resolvePreviousHiddenStateForEdit(
+  chat,
+  messagesBeforeEdit,
+  character,
+  chatCharacters,
+  loadout
+) {
+  if (!messagesBeforeEdit.length) {
+    return createEmptyHiddenStateOutputs(chatCharacters);
+  }
+
+  const userTurnCount = countUserTurns(messagesBeforeEdit);
+  if (userTurnCount > EDIT_REGEN_REPLAY_USER_TURN_LIMIT) {
+    return buildFastEditReplayFallback(chat, messagesBeforeEdit, chatCharacters);
+  }
+
+  try {
+    return await withTimeout(
+      rebuildHiddenStateBeforeMessage(
+        chat,
+        messagesBeforeEdit,
+        character,
+        chatCharacters,
+        loadout
+      ),
+      EDIT_REGEN_REPLAY_TIMEOUT_MS,
+      "Hidden-state replay"
+    );
+  } catch (error) {
+    console.warn(
+      `Falling back to fast edit replay state for ${chat.fileName || chat.id}:`,
+      error instanceof Error ? error.message : error
+    );
+    return buildFastEditReplayFallback(chat, messagesBeforeEdit, chatCharacters);
+  }
+}
+
 async function saveChatMessage(chatFileName, content) {
   const chat = await loadChat(chatFileName);
+  if (hasPendingRegenerationJobForChat(chatFileName)) {
+    throw new Error("Wait for the current regeneration to finish.");
+  }
   const chatCharacterIds = getChatCharacterIds(chat);
   const chatCharacters = (
     await Promise.all(chatCharacterIds.map((characterId) => loadCharacterById(characterId)))
@@ -1610,65 +1916,10 @@ async function saveChatMessage(chatFileName, content) {
     throw new Error("Message content is empty.");
   }
 
-  const draftMessages = [...(chat.messages || []), userMessage];
-  const runStartedAt = new Date().toISOString();
-  const pipelineTrace = [];
-  const pipelineDebugRun = {
-    startedAt: runStartedAt,
-    status: "running",
-    chatId: chat.id,
-    chatFileName: chat.fileName || chatFileName,
-    loadoutName: loadout?.name || "Model Loadout 1",
-    pipelineOrder: [],
-    steps: [],
-    errorMessage: "",
-  };
-  const traceStep = (step, model, extra = {}) => {
-    pipelineTrace.push({
-      step,
-      model: model || null,
-      at: new Date().toISOString(),
-      ...extra,
-    });
-  };
-
-  const continuityRole =
-    loadout?.roles?.continuity || defaultLoadouts[0].roles.continuity;
-  const eventRole = loadout?.roles?.event || defaultLoadouts[0].roles.event;
-  const mindRole = loadout?.roles?.mind || defaultLoadouts[0].roles.mind;
-  const goalRole = loadout?.roles?.goal || defaultLoadouts[0].roles.goal;
-  const statRole = loadout?.roles?.stat || defaultLoadouts[0].roles.stat;
-  const authorRole = loadout?.roles?.author || defaultLoadouts[0].roles.author;
-  const pipeline = sanitizePipeline(loadout?.pipeline);
+  const draftMessages = [...stripPendingAssistantMessages(chat.messages || []), userMessage];
   const nextTitle =
     chat.title === "New Chat" ? summarizeTitle(userMessage.content) : chat.title;
-  const characterRosterPrompt = formatCharactersForPrompt(chatCharacters);
-  const previousHiddenState = {
-    continuityOutput: chat.hiddenState?.continuityNotes?.content || "",
-    eventOutput: chat.hiddenState?.eventChain?.content || "",
-    mindOutput: chat.hiddenState?.mentalSynopsis?.content || "",
-    goalOutput: chat.hiddenState?.midTermGoals?.content || "",
-    statOutput:
-      chat.hiddenState?.relationshipStats?.content ||
-      buildDefaultRelationshipStatsForCharacters(chatCharacters),
-    authorOutput: chat.hiddenState?.authorScene?.content || "",
-  };
-  const currentOutputs = {};
-  const currentModels = {};
-  const roles = {
-    continuity: continuityRole,
-    event: eventRole,
-    mind: mindRole,
-    goal: goalRole,
-    stat: statRole,
-    author: authorRole,
-  };
-  pipelineDebugRun.pipelineOrder = [...pipeline.order];
-
-  traceStep("user_message_added", null, {
-    messageId: userMessage.id,
-    visibleMessageCount: draftMessages.length,
-  });
+  const previousHiddenState = createHiddenStateOutputsFromChat(chat, chatCharacters);
 
   await saveChat({
     ...chat,
@@ -1678,112 +1929,184 @@ async function saveChatMessage(chatFileName, content) {
     hiddenState: {
       ...(chat.hiddenState || {}),
       pipelineTrace: {
-        lastRun: [...pipelineTrace],
+        lastRun: [],
       },
     },
     messages: draftMessages,
   });
 
-  if (!pipeline.order.includes("author")) {
-    throw new Error('Loadout pipeline must include "author".');
-  }
-
   try {
-    for (const stepName of pipeline.order) {
-      const result = await executePipelineStep(stepName, {
-        character,
-        chatCharacters,
-        draftMessages,
-        characterRosterPrompt,
-        previousHiddenState,
-        currentOutputs,
-        roles,
-        pipeline,
-      });
-
-      currentOutputs[result.outputKey] = result.output;
-      currentModels[result.outputKey] = result.model;
-      pipelineDebugRun.steps.push(result.debug);
-
-      traceStep(PIPELINE_TRACE_LABELS[stepName] || `${stepName}_completed`, result.model, {
-        inputMessages: result.inputMessages.length,
-      });
-    }
-
-    const assistantText = currentOutputs.authorOutput;
-
-    const assistantMessage = {
-      id: makeId("msg"),
-      role: "assistant",
-      content: assistantText,
-      createdAt: new Date().toISOString(),
-    };
-
-    traceStep("author_message_added", null, {
-      messageId: assistantMessage.id,
-      visibleMessageCount: draftMessages.length + 1,
+    const result = await runPipelineForDraft({
+      chat,
+      chatFileName,
+      character,
+      chatCharacters,
+      loadout,
+      draftMessages,
+      previousHiddenState,
+      writeArtifacts: true,
     });
-
-    pipelineDebugRun.status = "completed";
 
     return saveChat({
       ...chat,
       title: nextTitle,
       characterName: character.name,
       updatedAt: new Date().toISOString(),
-      hiddenState: {
-        ...(chat.hiddenState || {}),
-        mentalSynopsis: {
-          content: currentOutputs.mindOutput || previousHiddenState.mindOutput,
-          updatedAt: new Date().toISOString(),
-          model: currentModels.mindOutput || mindRole.llm || "",
-        },
-        continuityNotes: {
-          content: currentOutputs.continuityOutput || previousHiddenState.continuityOutput,
-          updatedAt: new Date().toISOString(),
-          model: currentModels.continuityOutput || continuityRole.llm || "",
-        },
-        eventChain: {
-          content: currentOutputs.eventOutput || previousHiddenState.eventOutput,
-          updatedAt: new Date().toISOString(),
-          model: currentModels.eventOutput || eventRole.llm || "",
-        },
-        midTermGoals: {
-          content: currentOutputs.goalOutput || previousHiddenState.goalOutput,
-          updatedAt: new Date().toISOString(),
-          model: currentModels.goalOutput || goalRole.llm || "",
-        },
-        relationshipStats: {
-          content: currentOutputs.statOutput || previousHiddenState.statOutput,
-          updatedAt: new Date().toISOString(),
-          model: currentModels.statOutput || statRole.llm || "",
-        },
-        authorScene: {
-          content: assistantText,
-          updatedAt: new Date().toISOString(),
-          model: currentModels.authorOutput || authorRole.llm || OPENROUTER_AUTHOR_MODEL,
-        },
-        pipelineTrace: {
-          lastRun: pipelineTrace,
-        },
-      },
-      messages: [...draftMessages, assistantMessage],
+      hiddenState: buildHiddenStatePayload(
+        chat.hiddenState,
+        result.currentOutputs,
+        result.currentModels,
+        result.roles,
+        previousHiddenState,
+        result.assistantText,
+        result.pipelineTrace
+      ),
+      messages: [...draftMessages, result.assistantMessage],
     });
   } catch (error) {
-    pipelineDebugRun.status = "failed";
-    pipelineDebugRun.errorMessage =
-      error instanceof Error ? error.message : "Unknown pipeline error.";
     throw error;
-  } finally {
-    try {
-      await writePipelineDebugFile(pipelineDebugRun);
-    } catch (debugError) {
-      console.error(
-        "Failed to write pipeline debug file:",
-        debugError instanceof Error ? debugError.message : debugError
-      );
-    }
   }
+}
+
+async function editLastUserMessageAndRegenerate(chatFileName, messageId, content) {
+  const chat = await loadChat(chatFileName);
+  const chatCharacterIds = getChatCharacterIds(chat);
+  const chatCharacters = (
+    await Promise.all(chatCharacterIds.map((characterId) => loadCharacterById(characterId)))
+  ).filter(Boolean);
+  const character = chatCharacters[0] || null;
+  const loadout = chat.loadoutId ? await loadLoadoutById(chat.loadoutId) : null;
+  if (!character) {
+    throw new Error("Character not found for this chat.");
+  }
+  if (!OPENROUTER_API_KEY) {
+    throw new Error("OPENROUTER_API_KEY is not set.");
+  }
+
+  const editedContent = String(content || "").trim();
+  if (!editedContent) {
+    throw new Error("Message content is empty.");
+  }
+
+  const messages = stripPendingAssistantMessages(chat.messages || []);
+  const targetIndex = messages.findIndex((entry) => entry.id === messageId);
+  if (targetIndex < 0) {
+    throw new Error("Message not found in this chat.");
+  }
+  if (messages[targetIndex]?.role !== "user") {
+    throw new Error("Only user messages can be regenerated.");
+  }
+  const isLatestUserWithoutReply = targetIndex === messages.length - 1;
+  const isLastCompletedTurn =
+    targetIndex === messages.length - 2 && messages.at(-1)?.role === "assistant";
+  if (!isLatestUserWithoutReply && !isLastCompletedTurn) {
+    throw new Error("Only the most recent user message can be edited and regenerated.");
+  }
+
+  const messagesBeforeEdit = messages.slice(0, targetIndex);
+  const editedUserMessage = {
+    ...messages[targetIndex],
+    content: editedContent,
+  };
+  const draftMessages = [...messagesBeforeEdit, editedUserMessage];
+  const nextTitle =
+    chat.title === "New Chat" ? summarizeTitle(editedUserMessage.content) : chat.title;
+
+  const pendingAssistantMessage = {
+    id: `pending-regeneration-${messageId}-${Date.now()}`,
+    role: "assistant",
+    content: "Regenerating response...",
+    createdAt: new Date().toISOString(),
+    pending: true,
+  };
+  const pendingChat = await saveChat({
+    ...chat,
+    title: nextTitle,
+    characterName: character.name,
+    updatedAt: new Date().toISOString(),
+    messages: [...draftMessages, pendingAssistantMessage],
+  });
+
+  const jobKey = `${chatFileName}:${messageId}`;
+  const requestId = makeId("regen");
+  pendingRegenerationJobs.set(jobKey, { requestId });
+
+  void (async () => {
+    try {
+      const previousHiddenState = await resolvePreviousHiddenStateForEdit(
+        chat,
+        messagesBeforeEdit,
+        character,
+        chatCharacters,
+        loadout
+      );
+      const result = await runPipelineForDraft({
+        chat,
+        chatFileName,
+        character,
+        chatCharacters,
+        loadout,
+        draftMessages,
+        previousHiddenState,
+        writeArtifacts: true,
+      });
+
+      if (!isLatestPendingRegeneration(jobKey, requestId)) {
+        return;
+      }
+
+      await saveChat({
+        ...pendingChat,
+        title: nextTitle,
+        characterName: character.name,
+        updatedAt: new Date().toISOString(),
+        hiddenState: buildHiddenStatePayload(
+          chat.hiddenState,
+          result.currentOutputs,
+          result.currentModels,
+          result.roles,
+          previousHiddenState,
+          result.assistantText,
+          result.pipelineTrace
+        ),
+        messages: [...draftMessages, result.assistantMessage],
+      });
+    } catch (error) {
+      if (!isLatestPendingRegeneration(jobKey, requestId)) {
+        return;
+      }
+
+      const latestChat = await loadChat(chatFileName).catch(() => pendingChat);
+      const latestMessages = Array.isArray(latestChat?.messages)
+        ? [...latestChat.messages]
+        : [...pendingChat.messages];
+      const pendingIndex = latestMessages.findIndex(
+        (entry) => entry.id === pendingAssistantMessage.id
+      );
+      if (pendingIndex >= 0) {
+        latestMessages[pendingIndex] = {
+          ...latestMessages[pendingIndex],
+          content: `Regeneration failed: ${error.message || "Unknown error."}`,
+          pending: false,
+          error: true,
+        };
+      }
+
+      await saveChat({
+        ...latestChat,
+        title: nextTitle,
+        characterName: character.name,
+        updatedAt: new Date().toISOString(),
+        messages: latestMessages,
+      });
+    } finally {
+      if (isLatestPendingRegeneration(jobKey, requestId)) {
+        pendingRegenerationJobs.delete(jobKey);
+      }
+    }
+  })();
+
+  return pendingChat;
 }
 
 const server = http.createServer(async (request, response) => {
@@ -1879,6 +2202,17 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "POST" && url.pathname === "/api/chats/message") {
       const body = JSON.parse((await readRequestBody(request)) || "{}");
       const chat = await saveChatMessage(body.chatFileName, body.content);
+      sendJson(response, 200, { chat, directory: CHAT_DIR });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/chats/edit-last-user-and-regenerate") {
+      const body = JSON.parse((await readRequestBody(request)) || "{}");
+      const chat = await editLastUserMessageAndRegenerate(
+        body.chatFileName,
+        body.messageId,
+        body.content
+      );
       sendJson(response, 200, { chat, directory: CHAT_DIR });
       return;
     }

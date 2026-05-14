@@ -292,6 +292,7 @@ let suppressPipelineStepClick = false;
 let isSending = false;
 let isLoadoutMenuOpen = false;
 let isChatCharacterMenuOpen = false;
+let pendingChatRefreshTimer = null;
 
 function setStatus(message) {
   if (characterFileStatus) {
@@ -303,6 +304,55 @@ function setLoadoutStatus(message) {
   if (loadoutFileStatus) {
     loadoutFileStatus.textContent = message;
   }
+}
+
+function clearPendingChatRefresh() {
+  if (pendingChatRefreshTimer) {
+    window.clearTimeout(pendingChatRefreshTimer);
+    pendingChatRefreshTimer = null;
+  }
+}
+
+function hasPendingAssistantMessage(chat) {
+  return Boolean(chat?.messages?.at(-1)?.pending);
+}
+
+function syncComposerAvailability() {
+  setComposerDisabled(Boolean(isSending || hasPendingAssistantMessage(activeChat)));
+}
+
+function schedulePendingChatRefresh(delay = 2000) {
+  clearPendingChatRefresh();
+  if (pageType !== "chat" || !activeChat || !hasPendingAssistantMessage(activeChat)) {
+    return;
+  }
+
+  const targetFileName = activeChat.fileName;
+  pendingChatRefreshTimer = window.setTimeout(async () => {
+    pendingChatRefreshTimer = null;
+    try {
+      const payload = await apiRequest(`/chats/${encodeURIComponent(targetFileName)}`);
+      if (!activeChat || activeChat.fileName !== targetFileName) {
+        return;
+      }
+
+      activeChat = normalizeChatRecord(payload.chat);
+      updateChatSummary(activeChat);
+      renderChatList();
+      renderActiveChat();
+      syncComposerAvailability();
+    } catch (error) {
+      // Keep polling so background regeneration can still complete.
+    } finally {
+      if (
+        activeChat &&
+        activeChat.fileName === targetFileName &&
+        hasPendingAssistantMessage(activeChat)
+      ) {
+        schedulePendingChatRefresh();
+      }
+    }
+  }, delay);
 }
 
 function makeCharacterId() {
@@ -1453,14 +1503,6 @@ function createMessageElement(message, character) {
     body.className = "message-body";
     body.dataset.messageId = message.id;
 
-    const editButton = document.createElement("button");
-    editButton.className = "message-edit-button";
-    editButton.type = "button";
-    editButton.setAttribute("aria-label", "Edit message");
-    editButton.addEventListener("click", () => {
-      startMessageEditing(article, message.id);
-    });
-
     const label = document.createElement("span");
     label.className = "message-label";
     label.textContent = getCharacterDisplayName(character);
@@ -1468,7 +1510,18 @@ function createMessageElement(message, character) {
     const paragraph = document.createElement("p");
     paragraph.textContent = message.content;
 
-    body.append(editButton, label, paragraph);
+    if (!message.pending) {
+      const editButton = document.createElement("button");
+      editButton.className = "message-edit-button";
+      editButton.type = "button";
+      editButton.setAttribute("aria-label", "Edit message");
+      editButton.addEventListener("click", () => {
+        startMessageEditing(article, message.id);
+      });
+      body.append(editButton);
+    }
+
+    body.append(label, paragraph);
     shell.append(avatar, body);
     article.appendChild(shell);
     return article;
@@ -1512,6 +1565,7 @@ function renderActiveChat() {
     empty.className = "chat-empty-state";
     empty.textContent = "Create or select a chat to begin.";
     chatWindow.appendChild(empty);
+    syncComposerAvailability();
     return;
   }
 
@@ -1524,6 +1578,7 @@ function renderActiveChat() {
     empty.className = "chat-empty-state";
     empty.textContent = "Send the first message to start this conversation.";
     chatWindow.appendChild(empty);
+    syncComposerAvailability();
     return;
   }
 
@@ -1531,6 +1586,7 @@ function renderActiveChat() {
     chatWindow.appendChild(createMessageElement(message, character));
   });
   chatWindow.scrollTop = chatWindow.scrollHeight;
+  syncComposerAvailability();
 }
 
 function setComposerDisabled(disabled) {
@@ -1590,6 +1646,7 @@ async function attachSelectedLoadoutToActiveChat() {
   activeChat = normalizeChatRecord(payload.chat);
   updateChatSummary(activeChat);
   renderChatList();
+  syncComposerAvailability();
 }
 
 async function loadCharactersFromPc() {
@@ -1636,6 +1693,7 @@ async function loadChatsFromPc() {
 }
 
 async function loadActiveChat(fileName) {
+  clearPendingChatRefresh();
   const payload = await apiRequest(`/chats/${encodeURIComponent(fileName)}`);
   activeChat = normalizeChatRecord(payload.chat);
   const activeIds = getChatCharacterIds(activeChat);
@@ -1650,6 +1708,8 @@ async function loadActiveChat(fileName) {
   syncLoadoutUI();
   renderChatList();
   renderActiveChat();
+  schedulePendingChatRefresh();
+  syncComposerAvailability();
   const url = new URL(window.location.href);
   url.searchParams.set("chat", activeChat.fileName);
   window.history.replaceState({}, "", url);
@@ -1871,6 +1931,19 @@ function autosizeMessageEditor(textarea) {
   textarea.style.height = `${textarea.scrollHeight}px`;
 }
 
+function cleanupMessageEditingUI(messageElement) {
+  const body = messageElement.querySelector(".message-body");
+  const paragraph = body?.querySelector("p");
+  body?.querySelector(".message-inline-editor")?.remove();
+  body?.querySelector(".message-edit-actions")?.remove();
+  if (paragraph) {
+    paragraph.hidden = false;
+  }
+  messageElement.classList.remove("is-editing");
+  messageElement.style.minHeight = "";
+  delete messageElement.dataset.editState;
+}
+
 async function saveActiveChatEdits() {
   if (!activeChat) {
     return;
@@ -1885,7 +1958,50 @@ async function saveActiveChatEdits() {
   renderChatList();
 }
 
+function canEditLastUserMessageAndRegenerate(messageId) {
+  if (!activeChat || !Array.isArray(activeChat.messages)) {
+    return false;
+  }
+
+  const targetIndex = activeChat.messages.findIndex((entry) => entry.id === messageId);
+  if (targetIndex < 0) {
+    return false;
+  }
+
+  return (
+    activeChat.messages[targetIndex]?.role === "user" &&
+    targetIndex === activeChat.messages.length - 2 &&
+    activeChat.messages.at(-1)?.role === "assistant"
+  );
+}
+
+async function editLastUserMessageAndRegenerate(messageId, content) {
+  if (!activeChat) {
+    return;
+  }
+
+  const payload = await apiRequest("/chats/edit-last-user-and-regenerate", {
+    method: "POST",
+    body: JSON.stringify({
+      chatFileName: activeChat.fileName,
+      messageId,
+      content,
+    }),
+  });
+
+  activeChat = normalizeChatRecord(payload.chat);
+  updateChatSummary(activeChat);
+  renderChatList();
+  renderActiveChat();
+  schedulePendingChatRefresh();
+  syncComposerAvailability();
+}
+
 async function stopMessageEditing(messageElement, messageId, saveChanges) {
+  if (messageElement.dataset.editState === "stopping") {
+    return;
+  }
+
   const body = messageElement.querySelector(".message-body");
   const paragraph = body?.querySelector("p");
   const editor = body?.querySelector(".message-inline-editor");
@@ -1893,22 +2009,75 @@ async function stopMessageEditing(messageElement, messageId, saveChanges) {
     return;
   }
 
-  if (saveChanges && activeChat) {
+  if (!saveChanges) {
+    cleanupMessageEditingUI(messageElement);
+    return;
+  }
+
+  messageElement.dataset.editState = "stopping";
+
+  if (activeChat) {
     const message = activeChat.messages.find((entry) => entry.id === messageId);
     if (message) {
-      message.content = editor.value;
-      paragraph.textContent = editor.value;
-      await saveActiveChatEdits();
+      const previousContent = message.content;
+      const previousMessages = activeChat.messages.map((entry) => ({ ...entry }));
+      try {
+        const nextContent = editor.value.trim();
+        const shouldRegenerate =
+          nextContent !== message.content && canEditLastUserMessageAndRegenerate(messageId);
+
+        message.content = nextContent;
+        paragraph.textContent = nextContent;
+        cleanupMessageEditingUI(messageElement);
+
+        if (shouldRegenerate) {
+          isSending = true;
+          syncComposerAvailability();
+          activeChat.messages = [
+            ...activeChat.messages.slice(0, -1),
+            {
+              id: `pending-regeneration-${messageId}`,
+              role: "assistant",
+              content: "Regenerating response...",
+            },
+          ];
+          renderActiveChat();
+          await editLastUserMessageAndRegenerate(messageId, nextContent);
+        } else {
+          await saveActiveChatEdits();
+        }
+      } catch (error) {
+        message.content = previousContent;
+        if (activeChat) {
+          activeChat.messages = previousMessages;
+          renderActiveChat();
+        }
+        delete messageElement.dataset.editState;
+        setStatus(error.message || "Failed to update message.");
+      } finally {
+        isSending = false;
+        syncComposerAvailability();
+      }
+      return;
     }
   }
 
-  editor.remove();
-  paragraph.hidden = false;
-  messageElement.classList.remove("is-editing");
-  messageElement.style.minHeight = "";
+  cleanupMessageEditingUI(messageElement);
 }
 
 function startMessageEditing(messageElement, messageId) {
+  if (isSending) {
+    return;
+  }
+
+  if (
+    hasPendingAssistantMessage(activeChat) &&
+    !canEditLastUserMessageAndRegenerate(messageId)
+  ) {
+    setStatus("Wait for regeneration to finish.");
+    return;
+  }
+
   const body = messageElement.querySelector(".message-body");
   const paragraph = body?.querySelector("p");
   if (!body || !paragraph || body.querySelector(".message-inline-editor")) {
@@ -1920,9 +2089,24 @@ function startMessageEditing(messageElement, messageId) {
   editor.value = paragraph.textContent.trim();
   editor.setAttribute("aria-label", "Edit message text");
 
+  const actions = document.createElement("div");
+  actions.className = "message-edit-actions";
+
+  const saveButton = document.createElement("button");
+  saveButton.className = "message-edit-action message-edit-save";
+  saveButton.type = "button";
+  saveButton.textContent = "Save";
+
+  const cancelButton = document.createElement("button");
+  cancelButton.className = "message-edit-action message-edit-cancel";
+  cancelButton.type = "button";
+  cancelButton.textContent = "Cancel";
+
   messageElement.style.minHeight = `${messageElement.offsetHeight}px`;
   paragraph.hidden = true;
   body.appendChild(editor);
+  actions.append(cancelButton, saveButton);
+  body.appendChild(actions);
   messageElement.classList.add("is-editing");
 
   autosizeMessageEditor(editor);
@@ -1931,7 +2115,19 @@ function startMessageEditing(messageElement, messageId) {
   editor.setSelectionRange(editor.value.length, editor.value.length);
 
   editor.addEventListener("input", () => autosizeMessageEditor(editor));
-  editor.addEventListener("blur", () => {
+  saveButton.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    stopMessageEditing(messageElement, messageId, true);
+  });
+  cancelButton.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    stopMessageEditing(messageElement, messageId, false);
+  });
+  editor.addEventListener("blur", (event) => {
+    const nextFocused = event.relatedTarget;
+    if (nextFocused instanceof HTMLElement && actions.contains(nextFocused)) {
+      return;
+    }
     stopMessageEditing(messageElement, messageId, true);
   });
   editor.addEventListener("keydown", (event) => {
@@ -1952,6 +2148,11 @@ async function sendCurrentMessage() {
     return;
   }
 
+  if (hasPendingAssistantMessage(activeChat)) {
+    setStatus("Wait for regeneration to finish.");
+    return;
+  }
+
   const content = composerInput.value.trim();
   if (!content) {
     return;
@@ -1966,7 +2167,7 @@ async function sendCurrentMessage() {
   }
 
   isSending = true;
-  setComposerDisabled(true);
+  syncComposerAvailability();
 
   try {
     const payload = await apiRequest("/chats/message", {
@@ -1994,8 +2195,10 @@ async function sendCurrentMessage() {
     setStatus(error.message || "Sending message failed.");
   } finally {
     isSending = false;
-    setComposerDisabled(false);
-    composerInput?.focus();
+    syncComposerAvailability();
+    if (!composerInput?.disabled) {
+      composerInput.focus();
+    }
   }
 }
 
